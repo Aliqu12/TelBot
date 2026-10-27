@@ -1,0 +1,19 @@
+# Nur das Nötigste in den Build-Kontext – vor allem keine Geheimnisse.
+.env
+.env.*
+.git
+.gitignore
+.venv
+venv
+.vscode
+.idea
+__pycache__
+*.py[cod]
+.pytest_cache
+data
+*.db
+tests
+*.md
+compose.yaml
+Dockerfile
+.dockerignore

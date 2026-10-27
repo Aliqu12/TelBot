@@ -1,0 +1,52 @@
+# Persönlicher Telegram-KI-Assistent
+#
+#   Starten/aktualisieren:  docker compose up -d --build
+#   Logs ansehen:           docker compose logs -f
+#   Stoppen:                docker compose down
+#
+# Die Werte stammen aus der Datei .env im selben Ordner (oder aus den
+# Umgebungsvariablen eines Portainer-Stacks).
+name: telegram-assistant
+
+services:
+  bot:
+    build: .
+    image: telegram-assistant:latest
+    container_name: telegram-assistant
+    restart: unless-stopped
+    environment:
+      # ":?" bricht mit einer klaren Meldung ab, falls ein Pflichtwert fehlt.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN fehlt in .env}
+      GROQ_API_KEY: ${GROQ_API_KEY:?GROQ_API_KEY fehlt in .env}
+      ALLOWED_TELEGRAM_USER_ID: ${ALLOWED_TELEGRAM_USER_ID:-}
+      OWNER_NAME: ${OWNER_NAME:-Ali}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      GROQ_TEMPERATURE: ${GROQ_TEMPERATURE:-0.7}
+      GROQ_MAX_COMPLETION_TOKENS: ${GROQ_MAX_COMPLETION_TOKENS:-2048}
+      GROQ_TIMEOUT_SECONDS: ${GROQ_TIMEOUT_SECONDS:-60}
+      GROQ_MAX_RETRIES: ${GROQ_MAX_RETRIES:-2}
+      HISTORY_MAX_MESSAGES: ${HISTORY_MAX_MESSAGES:-20}
+      MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-4000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Im Container fest: liegt im persistenten Volume.
+      DATABASE_PATH: /data/assistant.db
+    volumes:
+      - assistant-data:/data
+    # Keine Ports: Long Polling baut nur ausgehende Verbindungen auf.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  assistant-data:
