@@ -1,0 +1,325 @@
+"""Tests für TodoistTaskProvider – ausschließlich gegen einen gefälschten HTTP-Transport (kein echter Token)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+import httpx
+import pytest
+
+from assistant_bot.config import TaskSettings
+from assistant_bot.tasks.factory import create_task_provider
+from assistant_bot.tasks.models import (
+    DueInput,
+    NewTask,
+    TaskAuthenticationError,
+    TaskChanges,
+    TaskConnectionError,
+    TaskNotFoundError,
+    TaskRateLimitError,
+    TaskTimeoutError,
+    TaskValidationError,
+)
+from assistant_bot.tasks.todoist import TodoistTaskProvider
+
+BERLIN = ZoneInfo("Europe/Berlin")
+TOKEN = "test-token-not-real"
+
+
+def task_json(task_id: str = "6X7rM8997g3RQmvh", **overrides: object) -> dict:
+    data = {
+        "id": task_id,
+        "content": "Waschmaschine reparieren",
+        "description": "",
+        "project_id": "6Jf8VQXxpwv56VQ7",
+        "priority": 1,
+        "labels": [],
+        "due": None,
+        "duration": None,
+    }
+    data.update(overrides)
+    return data
+
+
+class Recorder:
+    """Gefälschte Todoist-API: liefert vorbereitete Antworten und merkt sich alle Anfragen."""
+
+    def __init__(self, *responses: httpx.Response | Exception) -> None:
+        self.responses = list(responses)
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def body(self, index: int = -1) -> dict:
+        return json.loads(self.requests[index].content)
+
+
+def make_provider(recorder: Recorder) -> tuple[TodoistTaskProvider, list[float]]:
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    provider = TodoistTaskProvider(
+        TOKEN, timezone=BERLIN, timeout_seconds=5, transport=httpx.MockTransport(recorder), sleep=fake_sleep
+    )
+    return provider, sleeps
+
+
+def run(coro):  # noqa: ANN001, ANN201
+    return asyncio.run(coro)
+
+
+# --- Anlegen und Ändern -------------------------------------------------------
+
+
+def test_create_task_sends_utc_time_priority_and_duration() -> None:
+    recorder = Recorder(
+        httpx.Response(
+            200,
+            json=task_json(
+                priority=4,
+                due={"date": "2026-10-30T15:00:00Z", "timezone": "Europe/Berlin", "string": "30 Okt 16:00",
+                     "is_recurring": False},
+                duration={"amount": 90, "unit": "minute"},
+                labels=["Haushalt"],
+            ),
+        )
+    )
+    provider, _ = make_provider(recorder)
+    new = NewTask(
+        content="Waschmaschine reparieren",
+        priority=1,
+        due=DueInput(at=datetime(2026, 10, 30, 16, 0, tzinfo=BERLIN)),
+        duration_minutes=90,
+        labels=("Haushalt",),
+    )
+
+    task = run(provider.create_task(new))
+
+    request = recorder.requests[0]
+    assert request.method == "POST" and request.url.path == "/api/v1/tasks"
+    assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+    # 30.10.2026 ist nach Ende der Sommerzeit: 16:00 MEZ = 15:00 UTC.
+    assert recorder.body() == {
+        "content": "Waschmaschine reparieren",
+        "priority": 4,
+        "labels": ["Haushalt"],
+        "due_datetime": "2026-10-30T15:00:00Z",
+        "duration": 90,
+        "duration_unit": "minute",
+    }
+    assert task.priority == 1
+    assert task.due is not None and task.due.time == datetime(2026, 10, 30, 16, 0, tzinfo=BERLIN)
+    assert task.due.date == date(2026, 10, 30)
+    assert task.duration_minutes == 90
+    assert task.url == "https://app.todoist.com/app/task/6X7rM8997g3RQmvh"
+
+
+def test_summer_time_is_converted_correctly() -> None:
+    recorder = Recorder(httpx.Response(200, json=task_json()))
+    provider, _ = make_provider(recorder)
+
+    run(provider.create_task(NewTask(content="x", due=DueInput(at=datetime(2026, 10, 24, 16, 0, tzinfo=BERLIN)))))
+
+    assert recorder.body()["due_datetime"] == "2026-10-24T14:00:00Z"  # MESZ = UTC+2
+
+
+def test_create_recurring_and_all_day_tasks() -> None:
+    recorder = Recorder(httpx.Response(200, json=task_json()), httpx.Response(200, json=task_json()))
+    provider, _ = make_provider(recorder)
+
+    run(provider.create_task(NewTask(content="Müll rausbringen", due=DueInput(recurrence="jeden Sonntag"))))
+    run(provider.create_task(NewTask(content="Rechnung bezahlen", due=DueInput(on=date(2026, 10, 29)))))
+
+    assert recorder.body(0) == {"content": "Müll rausbringen", "due_string": "jeden Sonntag", "due_lang": "de"}
+    assert recorder.body(1) == {"content": "Rechnung bezahlen", "due_date": "2026-10-29"}
+
+
+def test_update_can_clear_due_and_duration() -> None:
+    recorder = Recorder(httpx.Response(200, json=task_json()))
+    provider, _ = make_provider(recorder)
+
+    run(provider.update_task("abc123", TaskChanges(due=DueInput(clear=True), clear_duration=True, content="Neu")))
+
+    assert recorder.requests[0].url.path == "/api/v1/tasks/abc123"
+    assert recorder.body() == {
+        "content": "Neu",
+        "due_string": "no date",
+        "due_lang": "en",
+        "duration": None,
+        "duration_unit": None,
+    }
+
+
+def test_complete_and_delete_use_the_right_endpoints() -> None:
+    recorder = Recorder(httpx.Response(204), httpx.Response(204))
+    provider, _ = make_provider(recorder)
+
+    run(provider.complete_task("abc123"))
+    run(provider.delete_task("abc123"))
+
+    assert [(r.method, r.url.path) for r in recorder.requests] == [
+        ("POST", "/api/v1/tasks/abc123/close"),
+        ("DELETE", "/api/v1/tasks/abc123"),
+    ]
+
+
+def test_invalid_ids_are_rejected_before_any_request() -> None:
+    recorder = Recorder()
+    provider, _ = make_provider(recorder)
+
+    with pytest.raises(TaskValidationError):
+        run(provider.delete_task("../projects/1"))
+    assert recorder.requests == []
+
+
+# --- Lesen ----------------------------------------------------------------------
+
+
+def test_list_tasks_follows_pagination_and_parses_due_variants() -> None:
+    floating_task = task_json("a2", due={"date": "2026-10-28T09:30:00", "timezone": None, "is_recurring": False})
+    page1 = {
+        "results": [
+            task_json("a1", due={"date": "2026-10-28", "is_recurring": False, "string": "heute"}),
+            floating_task,
+        ],
+        "next_cursor": "CURSOR2",
+    }
+    page2 = {
+        "results": [
+            floating_task,  # Duplikat über Seitengrenzen
+            task_json(
+                "a3",
+                due={"date": "2026-11-01T09:00:00Z", "timezone": "Europe/Berlin", "is_recurring": True,
+                     "string": "jeden Sonntag um 10 Uhr"},
+            ),
+        ],
+        "next_cursor": None,
+    }
+    recorder = Recorder(httpx.Response(200, json=page1), httpx.Response(200, json=page2))
+    provider, _ = make_provider(recorder)
+
+    tasks = run(provider.list_tasks())
+
+    assert [t.task_id for t in tasks] == ["a1", "a2", "a3"]
+    assert recorder.requests[0].url.params["limit"] == "200"
+    assert recorder.requests[1].url.params["cursor"] == "CURSOR2"
+    all_day, floating, fixed = tasks[0].due, tasks[1].due, tasks[2].due
+    assert all_day.date == date(2026, 10, 28) and all_day.time is None
+    assert floating.time == datetime(2026, 10, 28, 9, 30, tzinfo=BERLIN)
+    assert fixed.time == datetime(2026, 11, 1, 10, 0, tzinfo=BERLIN) and fixed.is_recurring
+    assert fixed.text == "jeden Sonntag um 10 Uhr"
+
+
+def test_list_projects() -> None:
+    recorder = Recorder(
+        httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "p1", "name": "Inbox", "inbox_project": True},
+                    {"id": "p2", "name": "Haushalt"},
+                    {"id": "p3", "name": "Alt", "is_archived": True},
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    provider, _ = make_provider(recorder)
+
+    projects = run(provider.list_projects())
+
+    assert [(p.name, p.is_inbox) for p in projects] == [("Inbox", True), ("Haushalt", False)]
+
+
+# --- Fehler und Wiederholungen ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status", "error"),
+    [(401, TaskAuthenticationError), (404, TaskNotFoundError), (503, TaskConnectionError)],
+)
+def test_http_errors_are_mapped(status: int, error: type[Exception]) -> None:
+    recorder = Recorder(httpx.Response(status, json={"error": "x"}))
+    provider, _ = make_provider(recorder)
+
+    with pytest.raises(error) as excinfo:
+        run(provider.complete_task("abc"))
+    assert TOKEN not in str(excinfo.value)
+    assert len(recorder.requests) == 1  # Schreibzugriffe werden nicht wiederholt
+
+
+def test_validation_error_contains_sanitized_detail() -> None:
+    recorder = Recorder(httpx.Response(400, json={"error": "Invalid date format\x07", "error_code": 42}))
+    provider, _ = make_provider(recorder)
+
+    with pytest.raises(TaskValidationError, match="Invalid date format$"):
+        run(provider.create_task(NewTask(content="x")))
+
+
+def test_get_is_retried_after_short_rate_limit_and_server_error() -> None:
+    recorder = Recorder(
+        httpx.Response(429, json={"error": "Too many", "error_extra": {"retry_after": 2}}),
+        httpx.Response(200, json=task_json()),
+        httpx.Response(502),
+        httpx.Response(200, json=task_json()),
+    )
+    provider, sleeps = make_provider(recorder)
+
+    run(provider.get_task("abc"))
+    run(provider.get_task("abc"))
+
+    assert len(recorder.requests) == 4
+    assert sleeps == [2]
+
+
+def test_long_rate_limit_is_reported_with_retry_after() -> None:
+    recorder = Recorder(httpx.Response(429, json={"error_extra": {"retry_after": 40}}))
+    provider, sleeps = make_provider(recorder)
+
+    with pytest.raises(TaskRateLimitError) as excinfo:
+        run(provider.create_task(NewTask(content="x")))
+
+    assert excinfo.value.retry_after == 40 and "40 Sekunden" in str(excinfo.value)
+    assert sleeps == [] and len(recorder.requests) == 1
+
+
+def test_write_timeout_is_not_retried_and_warns_about_uncertainty() -> None:
+    recorder = Recorder(httpx.ReadTimeout("timeout"))
+    provider, _ = make_provider(recorder)
+
+    with pytest.raises(TaskTimeoutError, match="möglicherweise"):
+        run(provider.create_task(NewTask(content="x")))
+    assert len(recorder.requests) == 1
+
+
+def test_connect_error_is_retried_even_for_writes() -> None:
+    recorder = Recorder(httpx.ConnectError("refused"), httpx.Response(200, json=task_json()))
+    provider, _ = make_provider(recorder)
+
+    run(provider.create_task(NewTask(content="x")))
+
+    assert len(recorder.requests) == 2
+
+
+def test_unexpected_payload_is_reported() -> None:
+    recorder = Recorder(httpx.Response(200, json={"unexpected": True}))
+    provider, _ = make_provider(recorder)
+
+    with pytest.raises(TaskConnectionError):
+        run(provider.list_tasks())
+
+
+def test_factory_creates_todoist_provider() -> None:
+    provider = create_task_provider(TaskSettings(provider="todoist", api_token=TOKEN), BERLIN)
+    assert isinstance(provider, TodoistTaskProvider)
+    run(provider.aclose())

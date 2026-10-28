@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import sys
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -19,8 +20,11 @@ from .mail.factory import create_email_provider
 from .mail.service import EmailService
 from .mail.tools import build_email_tools
 from .prompts import build_system_prompt
+from .tasks.factory import create_task_provider
+from .tasks.service import TaskService
+from .tasks.tools import build_task_tools
 from .telegram_bot.application import build_application
-from .tools import ToolRegistry
+from .tools import Tool, ToolRegistry
 
 logger = logging.getLogger("assistant_bot")
 
@@ -51,8 +55,10 @@ def main() -> int:
         logger.critical("Datenbank %s konnte nicht initialisiert werden: %s", settings.database_path, exc)
         return 1
 
+    timezone = ZoneInfo(settings.timezone)
     email_service: EmailService | None = None
-    tools: ToolRegistry | None = None
+    task_service: TaskService | None = None
+    tools: list[Tool] = []
     if settings.email is not None:
         email_service = EmailService(
             create_email_provider(settings.email),
@@ -60,24 +66,35 @@ def main() -> int:
             draft_ttl_seconds=settings.email.draft_ttl_seconds,
             max_body_chars=settings.email.max_body_chars,
         )
-        tools = ToolRegistry(build_email_tools(email_service))
+        tools += build_email_tools(email_service)
         logger.info(
             "E-Mail-Integration aktiv (Provider=%s, Empfänger-Freigabeliste=%s).",
             email_service.provider_name,
             "ja" if settings.email.allowed_recipients else "nein",
         )
+    if settings.tasks is not None:
+        task_service = TaskService(create_task_provider(settings.tasks, timezone), timezone=timezone)
+        tools += build_task_tools(task_service)
+        logger.info(
+            "Aufgaben-Integration aktiv (Provider=%s, Zeitzone=%s).", task_service.provider_name, settings.timezone
+        )
 
     assistant = Assistant(
         chat_model=create_groq_chat_model(settings),
         conversations=conversations,
-        system_prompt=build_system_prompt(settings.owner_name, email_enabled=email_service is not None),
-        tools=tools,
+        system_prompt=build_system_prompt(
+            settings.owner_name,
+            email_enabled=email_service is not None,
+            tasks_enabled=task_service is not None,
+        ),
+        tools=ToolRegistry(tools) if tools else None,
+        timezone=timezone,
     )
-    application = build_application(settings, assistant, email_service)
+    application = build_application(settings, assistant, email_service, task_service)
 
     try:
         # Long Polling; beendet sich sauber bei SIGINT/SIGTERM (z. B. docker stop).
-        # CALLBACK_QUERY wird für die Schaltflächen der E-Mail-Freigabe benötigt.
+        # CALLBACK_QUERY wird für die Schaltflächen (E-Mail-Freigabe, Aufgaben löschen) benötigt.
         application.run_polling(allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY])
     except InvalidToken:
         logger.critical("Telegram hat den Bot-Token abgelehnt. TELEGRAM_BOT_TOKEN prüfen.")

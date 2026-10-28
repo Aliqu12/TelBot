@@ -1,0 +1,40 @@
+"""Vertrag, den jeder Aufgaben-Provider (Todoist, später z. B. Microsoft To Do) erfüllen muss."""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+from .models import NewTask, Project, Task, TaskChanges
+
+
+class TaskProvider(Protocol):
+    """Zugriff auf genau ein Aufgaben-Konto.
+
+    Implementierungen übersetzen ihre technischen Fehler in die Fehlerklassen aus
+    ``models`` (``TaskAuthenticationError``, ``TaskRateLimitError``, ...) und
+    liefern Fälligkeiten in der konfigurierten Zeitzone.
+    """
+
+    name: str
+
+    async def list_tasks(self, project_id: str | None = None) -> list[Task]:
+        """Alle offenen Aufgaben (optional eines Projekts)."""
+        ...
+
+    async def get_task(self, task_id: str) -> Task:
+        """Raises: TaskNotFoundError, wenn die ID unbekannt oder die Aufgabe erledigt ist."""
+        ...
+
+    async def create_task(self, task: NewTask) -> Task: ...
+
+    async def update_task(self, task_id: str, changes: TaskChanges) -> Task: ...
+
+    async def complete_task(self, task_id: str) -> None:
+        """Erledigt eine Aufgabe; wiederkehrende Aufgaben springen zum nächsten Termin."""
+        ...
+
+    async def delete_task(self, task_id: str) -> None: ...
+
+    async def list_projects(self) -> list[Project]: ...
+
+    async def aclose(self) -> None: ...

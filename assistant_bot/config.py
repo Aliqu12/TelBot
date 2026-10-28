@@ -7,13 +7,17 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .mail.models import EmailValidationError, normalize_email_address
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_DATABASE_PATH = "data/assistant.db"
+DEFAULT_TIMEZONE = "Europe/Berlin"
 # Muss zu den Providern in ``mail.factory`` passen.
 SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
+# Muss zu den Providern in ``tasks.factory`` passen.
+SUPPORTED_TASK_PROVIDERS = ("todoist",)
 
 _TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{30,}$")
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -39,6 +43,15 @@ class EmailSettings:
 
 
 @dataclass(frozen=True)
+class TaskSettings:
+    """Konfiguration der optionalen Aufgaben-Integration (Todoist)."""
+
+    provider: str
+    api_token: str = field(repr=False)
+    timeout_seconds: float = 15.0
+
+
+@dataclass(frozen=True)
 class Settings:
     """Validierte, unveränderliche Anwendungskonfiguration."""
 
@@ -57,6 +70,8 @@ class Settings:
     max_input_chars: int
     log_level: str
     email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
+    tasks: TaskSettings | None = None  # None = Aufgaben-Integration deaktiviert
+    timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
 
     @property
     def secrets(self) -> tuple[str, ...]:
@@ -64,6 +79,8 @@ class Settings:
         secrets = (self.telegram_bot_token, self.groq_api_key)
         if self.email is not None:
             secrets += (self.email.app_password,)
+        if self.tasks is not None:
+            secrets += (self.tasks.api_token,)
         return secrets
 
 
@@ -168,6 +185,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         max_input_chars=reader.integer("MAX_INPUT_CHARS", 4000, 1, 4096),
         log_level=log_level,
         email=_load_email_settings(reader, owner_name),
+        tasks=_load_task_settings(reader),
+        timezone=_load_timezone(reader),
     )
 
     if reader.errors:
@@ -212,6 +231,40 @@ def _load_email_settings(reader: _EnvReader, owner_name: str) -> EmailSettings |
         draft_ttl_seconds=reader.integer("EMAIL_DRAFT_TTL_SECONDS", 900, 60, 86400),
         timeout_seconds=reader.number("EMAIL_TIMEOUT_SECONDS", 30.0, 5.0, 300.0),
         max_body_chars=reader.integer("EMAIL_MAX_BODY_CHARS", 6000, 500, 50000),
+    )
+
+
+def _load_timezone(reader: _EnvReader) -> str:
+    name = reader.text("TIMEZONE", DEFAULT_TIMEZONE)
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        reader.errors.append(
+            f"TIMEZONE {name!r} ist keine bekannte Zeitzone (erwartet z. B. 'Europe/Berlin'; "
+            "unter Windows muss das Paket 'tzdata' installiert sein)."
+        )
+    return name
+
+
+def _load_task_settings(reader: _EnvReader) -> TaskSettings | None:
+    provider = reader.raw("TASK_PROVIDER").lower()
+    if not provider:
+        return None
+    if provider not in SUPPORTED_TASK_PROVIDERS:
+        reader.errors.append(
+            f"TASK_PROVIDER {provider!r} wird nicht unterstützt (möglich: {', '.join(SUPPORTED_TASK_PROVIDERS)})."
+        )
+
+    api_token = reader.raw("TODOIST_API_TOKEN")
+    if not api_token:
+        reader.errors.append("TODOIST_API_TOKEN fehlt (Pflichtwert, wenn TASK_PROVIDER=todoist gesetzt ist).")
+    elif any(char.isspace() for char in api_token) or not api_token.isprintable():
+        reader.errors.append("TODOIST_API_TOKEN darf keine Leer- oder Steuerzeichen enthalten.")
+
+    return TaskSettings(
+        provider=provider,
+        api_token=api_token,
+        timeout_seconds=reader.number("TODOIST_TIMEOUT_SECONDS", 15.0, 3.0, 120.0),
     )
 
 

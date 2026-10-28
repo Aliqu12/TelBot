@@ -17,9 +17,12 @@ from telegram.ext import (
 from ..assistant import Assistant
 from ..config import Settings
 from ..mail.service import EmailService
+from ..tasks.service import TaskService
 from .access import AccessPolicy
 from .email_confirmation import CALLBACK_PATTERN, EmailConfirmationHandlers
 from .handlers import BotHandlers
+from .task_confirmation import CALLBACK_PATTERN as TASK_CALLBACK_PATTERN
+from .task_confirmation import TaskConfirmationHandlers
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +34,18 @@ BOT_COMMANDS = [
 ]
 
 
-def build_application(settings: Settings, assistant: Assistant, email_service: EmailService | None = None) -> Application:
+def build_application(
+    settings: Settings,
+    assistant: Assistant,
+    email_service: EmailService | None = None,
+    task_service: TaskService | None = None,
+) -> Application:
     access = AccessPolicy(settings.allowed_telegram_user_id)
     email_confirmation = (
         EmailConfirmationHandlers(email=email_service, access=access) if email_service is not None else None
+    )
+    task_confirmation = (
+        TaskConfirmationHandlers(tasks=task_service, access=access) if task_service is not None else None
     )
     handlers = BotHandlers(
         assistant=assistant,
@@ -42,6 +53,7 @@ def build_application(settings: Settings, assistant: Assistant, email_service: E
         owner_name=settings.owner_name,
         max_input_chars=settings.max_input_chars,
         email_confirmation=email_confirmation,
+        task_confirmation=task_confirmation,
     )
 
     async def post_init(application: Application) -> None:
@@ -55,6 +67,8 @@ def build_application(settings: Settings, assistant: Assistant, email_service: E
 
     async def post_shutdown(application: Application) -> None:
         await assistant.aclose()
+        if task_service is not None:
+            await task_service.aclose()
         logger.info("Bot beendet.")
 
     application = (
@@ -77,5 +91,7 @@ def build_application(settings: Settings, assistant: Assistant, email_service: E
     application.add_handler(MessageHandler(base & ~filters.TEXT, handlers.unsupported_message))
     if email_confirmation is not None:
         application.add_handler(CallbackQueryHandler(email_confirmation.callback, pattern=CALLBACK_PATTERN))
+    if task_confirmation is not None:
+        application.add_handler(CallbackQueryHandler(task_confirmation.callback, pattern=TASK_CALLBACK_PATTERN))
     application.add_error_handler(handlers.on_error)
     return application

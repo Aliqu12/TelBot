@@ -8,7 +8,8 @@ die Telegram- oder Groq-Anbindung zu verändern.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from collections.abc import Callable
+from datetime import datetime, tzinfo
 
 from .conversation import ConversationService
 from .llm import ChatModel
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Obergrenze für Modell-Runden mit Werkzeugaufrufen pro Nutzernachricht (Kosten-/Schleifenschutz).
 MAX_TOOL_ROUNDS = 5
 TOOL_LIMIT_MESSAGE = "Ich konnte die Anfrage nicht vollständig bearbeiten. Formuliere sie bitte etwas einfacher."
+_WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 
 
 class Assistant:
@@ -29,11 +31,15 @@ class Assistant:
         conversations: ConversationService,
         system_prompt: str,
         tools: ToolRegistry | None = None,
+        timezone: tzinfo | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._chat_model = chat_model
         self._conversations = conversations
         self._system_prompt = system_prompt
         self._tools = tools
+        self._timezone = timezone
+        self._now = now or (lambda: datetime.now(timezone))
 
     async def reply(self, chat_id: int, user_text: str) -> str:
         """Erzeugt eine Antwort und speichert den Austausch erst nach Erfolg.
@@ -44,7 +50,7 @@ class Assistant:
         history = await self._conversations.get_history(chat_id)
         system_prompt = self._system_prompt
         if self._tools:
-            system_prompt += f"\nHeutiges Datum: {date.today().isoformat()}"
+            system_prompt += "\n" + self._date_context()
         messages = [
             ChatMessage(role="system", content=system_prompt),
             *history,
@@ -78,6 +84,17 @@ class Assistant:
                 messages.append(ChatMessage(role="tool", content=result, tool_call_id=call.call_id))
         logger.warning("Maximale Anzahl an Werkzeugrunden erreicht (chat_id=%s).", chat_id)
         return TOOL_LIMIT_MESSAGE
+
+    def _date_context(self) -> str:
+        """Datum, Wochentag und Uhrzeit, damit das Modell "morgen" oder "Freitag" korrekt berechnet."""
+        now = self._now()
+        text = (
+            f"Heutiges Datum: {_WEEKDAYS[now.weekday()]}, {now.strftime('%d.%m.%Y')} ({now.date().isoformat()}), "
+            f"aktuelle Uhrzeit: {now.strftime('%H:%M')}"
+        )
+        if self._timezone is not None:
+            text += f" (Zeitzone {self._timezone})"
+        return text
 
     async def reset(self, chat_id: int) -> None:
         deleted = await self._conversations.reset(chat_id)
