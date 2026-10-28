@@ -28,11 +28,20 @@ services:
       HISTORY_MAX_MESSAGES: ${HISTORY_MAX_MESSAGES:-20}
       MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-4000}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # E-Mail (optional, leer = deaktiviert)
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
+      EMAIL_ADDRESS: ${EMAIL_ADDRESS:-}
+      EMAIL_APP_PASSWORD: ${EMAIL_APP_PASSWORD:-}
+      EMAIL_SENDER_NAME: ${EMAIL_SENDER_NAME:-}
+      EMAIL_ALLOWED_RECIPIENTS: ${EMAIL_ALLOWED_RECIPIENTS:-}
+      EMAIL_DRAFT_TTL_SECONDS: ${EMAIL_DRAFT_TTL_SECONDS:-900}
+      EMAIL_TIMEOUT_SECONDS: ${EMAIL_TIMEOUT_SECONDS:-30}
+      EMAIL_MAX_BODY_CHARS: ${EMAIL_MAX_BODY_CHARS:-6000}
       # Im Container fest: liegt im persistenten Volume.
       DATABASE_PATH: /data/assistant.db
     volumes:
       - assistant-data:/data
-    # Keine Ports: Long Polling baut nur ausgehende Verbindungen auf.
+    # Keine Ports: Long Polling, IMAP und SMTP bauen nur ausgehende Verbindungen auf.
     read_only: true
     tmpfs:
       - /tmp
