@@ -8,8 +8,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .mail.models import EmailValidationError, normalize_email_address
+
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_DATABASE_PATH = "data/assistant.db"
+# Muss zu den Providern in ``mail.factory`` passen.
+SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
 
 _TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{30,}$")
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -17,6 +21,21 @@ _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 class ConfigError(Exception):
     """Die Konfiguration ist unvollständig oder ungültig."""
+
+
+@dataclass(frozen=True)
+class EmailSettings:
+    """Konfiguration der optionalen E-Mail-Integration."""
+
+    provider: str
+    address: str
+    app_password: str = field(repr=False)
+    sender_name: str
+    # Leer = jede gültige Adresse (nach Bestätigung). Sonst nur diese Adressen bzw. "@domain".
+    allowed_recipients: tuple[str, ...]
+    draft_ttl_seconds: int
+    timeout_seconds: float
+    max_body_chars: int
 
 
 @dataclass(frozen=True)
@@ -37,11 +56,15 @@ class Settings:
     history_max_messages: int
     max_input_chars: int
     log_level: str
+    email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
 
     @property
     def secrets(self) -> tuple[str, ...]:
         """Werte, die niemals im Klartext geloggt werden dürfen."""
-        return (self.telegram_bot_token, self.groq_api_key)
+        secrets = (self.telegram_bot_token, self.groq_api_key)
+        if self.email is not None:
+            secrets += (self.email.app_password,)
+        return secrets
 
 
 class _EnvReader:
@@ -144,9 +167,68 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         history_max_messages=reader.integer("HISTORY_MAX_MESSAGES", 20, 1, 200),
         max_input_chars=reader.integer("MAX_INPUT_CHARS", 4000, 1, 4096),
         log_level=log_level,
+        email=_load_email_settings(reader, owner_name),
     )
 
     if reader.errors:
         details = "\n".join(f"  - {error}" for error in reader.errors)
         raise ConfigError(f"Ungültige Konfiguration:\n{details}")
     return settings
+
+
+def _load_email_settings(reader: _EnvReader, owner_name: str) -> EmailSettings | None:
+    provider = reader.raw("EMAIL_PROVIDER").lower()
+    if not provider:
+        return None
+    if provider not in SUPPORTED_EMAIL_PROVIDERS:
+        reader.errors.append(
+            f"EMAIL_PROVIDER {provider!r} wird nicht unterstützt (möglich: {', '.join(SUPPORTED_EMAIL_PROVIDERS)})."
+        )
+
+    address = reader.raw("EMAIL_ADDRESS")
+    if not address:
+        reader.errors.append("EMAIL_ADDRESS fehlt (Pflichtwert, wenn EMAIL_PROVIDER gesetzt ist).")
+    else:
+        try:
+            address = normalize_email_address(address)
+        except EmailValidationError:
+            reader.errors.append("EMAIL_ADDRESS ist keine gültige E-Mail-Adresse.")
+
+    # App-Passwörter werden teils mit Leerzeichen-Gruppen angezeigt; diese werden entfernt.
+    app_password = "".join(reader.raw("EMAIL_APP_PASSWORD").split())
+    if not app_password:
+        reader.errors.append("EMAIL_APP_PASSWORD fehlt (Pflichtwert, wenn EMAIL_PROVIDER gesetzt ist).")
+
+    sender_name = reader.text("EMAIL_SENDER_NAME", owner_name)
+    if len(sender_name) > 100 or not sender_name.isprintable():
+        reader.errors.append("EMAIL_SENDER_NAME darf höchstens 100 druckbare Zeichen enthalten.")
+
+    return EmailSettings(
+        provider=provider,
+        address=address,
+        app_password=app_password,
+        sender_name=sender_name,
+        allowed_recipients=_parse_recipient_allowlist(reader),
+        draft_ttl_seconds=reader.integer("EMAIL_DRAFT_TTL_SECONDS", 900, 60, 86400),
+        timeout_seconds=reader.number("EMAIL_TIMEOUT_SECONDS", 30.0, 5.0, 300.0),
+        max_body_chars=reader.integer("EMAIL_MAX_BODY_CHARS", 6000, 500, 50000),
+    )
+
+
+def _parse_recipient_allowlist(reader: _EnvReader) -> tuple[str, ...]:
+    entries = []
+    for raw_entry in reader.raw("EMAIL_ALLOWED_RECIPIENTS").split(","):
+        entry = raw_entry.strip()
+        if not entry:
+            continue
+        try:
+            if entry.startswith("@"):
+                entries.append("@" + normalize_email_address("x" + entry).rpartition("@")[2])
+            else:
+                entries.append(normalize_email_address(entry).lower())
+        except EmailValidationError:
+            reader.errors.append(
+                f"EMAIL_ALLOWED_RECIPIENTS enthält einen ungültigen Eintrag: {entry!r} "
+                "(erwartet: name@domain.de oder @domain.de)."
+            )
+    return tuple(entries)

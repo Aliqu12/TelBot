@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol
 
 import groq
 from groq import AsyncGroq
 
-from .messages import ChatMessage
+from .messages import ChatMessage, ToolCall
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -45,10 +46,22 @@ class LLMEmptyResponseError(LLMError):
     """Das Modell hat keinen verwertbaren Text geliefert."""
 
 
+@dataclass(frozen=True, slots=True)
+class ModelTurn:
+    """Antwort des Modells: entweder Text oder Werkzeugaufrufe (oder beides)."""
+
+    content: str
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
 class ChatModel(Protocol):
     """Schnittstelle, die der Assistent von einem Sprachmodell erwartet."""
 
     async def complete(self, messages: Sequence[ChatMessage]) -> str: ...
+
+    async def complete_with_tools(
+        self, messages: Sequence[ChatMessage], tools: Sequence[dict[str, Any]]
+    ) -> ModelTurn: ...
 
     async def aclose(self) -> None: ...
 
@@ -70,12 +83,41 @@ class GroqChatModel:
         self._max_completion_tokens = max_completion_tokens
 
     async def complete(self, messages: Sequence[ChatMessage]) -> str:
+        choice = await self._request(messages)
+        content = (choice.message.content or "").strip()
+        if not content:
+            logger.warning("Leere Antwort vom Modell (finish_reason=%s).", choice.finish_reason)
+            raise LLMEmptyResponseError()
+        if choice.finish_reason == "length":
+            logger.info("Antwort wurde durch GROQ_MAX_COMPLETION_TOKENS gekürzt.")
+        return content
+
+    async def complete_with_tools(
+        self, messages: Sequence[ChatMessage], tools: Sequence[dict[str, Any]]
+    ) -> ModelTurn:
+        """Wie ``complete``, das Modell darf aber Werkzeugaufrufe anfordern.
+
+        Das Modell führt nichts selbst aus – es liefert nur Name und Argumente.
+        """
+        choice = await self._request(messages, tools=list(tools), tool_choice="auto")
+        tool_calls = tuple(
+            ToolCall(call_id=call.id, name=call.function.name, arguments=call.function.arguments or "{}")
+            for call in (choice.message.tool_calls or [])
+        )
+        content = (choice.message.content or "").strip()
+        if not content and not tool_calls:
+            logger.warning("Leere Antwort vom Modell (finish_reason=%s).", choice.finish_reason)
+            raise LLMEmptyResponseError()
+        return ModelTurn(content=content, tool_calls=tool_calls)
+
+    async def _request(self, messages: Sequence[ChatMessage], **extra: Any) -> Any:
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=[message.to_api_dict() for message in messages],  # type: ignore[misc]
                 temperature=self._temperature,
                 max_completion_tokens=self._max_completion_tokens,
+                **extra,
             )
         # Reihenfolge beachten: speziellere Klassen vor ihren Basisklassen.
         except groq.RateLimitError as exc:
@@ -106,15 +148,7 @@ class GroqChatModel:
         if not response.choices:
             logger.warning("Groq-Antwort enthält keine Auswahl (choices).")
             raise LLMEmptyResponseError()
-
-        choice = response.choices[0]
-        content = (choice.message.content or "").strip()
-        if not content:
-            logger.warning("Leere Antwort vom Modell (finish_reason=%s).", choice.finish_reason)
-            raise LLMEmptyResponseError()
-        if choice.finish_reason == "length":
-            logger.info("Antwort wurde durch GROQ_MAX_COMPLETION_TOKENS gekürzt.")
-        return content
+        return response.choices[0]
 
     async def aclose(self) -> None:
         await self._client.close()

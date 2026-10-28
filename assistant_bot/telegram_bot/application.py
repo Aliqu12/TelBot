@@ -5,11 +5,20 @@ from __future__ import annotations
 import logging
 
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from ..assistant import Assistant
 from ..config import Settings
+from ..mail.service import EmailService
 from .access import AccessPolicy
+from .email_confirmation import CALLBACK_PATTERN, EmailConfirmationHandlers
 from .handlers import BotHandlers
 
 logger = logging.getLogger(__name__)
@@ -22,13 +31,17 @@ BOT_COMMANDS = [
 ]
 
 
-def build_application(settings: Settings, assistant: Assistant) -> Application:
+def build_application(settings: Settings, assistant: Assistant, email_service: EmailService | None = None) -> Application:
     access = AccessPolicy(settings.allowed_telegram_user_id)
+    email_confirmation = (
+        EmailConfirmationHandlers(email=email_service, access=access) if email_service is not None else None
+    )
     handlers = BotHandlers(
         assistant=assistant,
         access=access,
         owner_name=settings.owner_name,
         max_input_chars=settings.max_input_chars,
+        email_confirmation=email_confirmation,
     )
 
     async def post_init(application: Application) -> None:
@@ -62,5 +75,7 @@ def build_application(settings: Settings, assistant: Assistant) -> Application:
     application.add_handler(MessageHandler(base & filters.COMMAND, handlers.unknown_command))
     application.add_handler(MessageHandler(base & filters.TEXT, handlers.text_message))
     application.add_handler(MessageHandler(base & ~filters.TEXT, handlers.unsupported_message))
+    if email_confirmation is not None:
+        application.add_handler(CallbackQueryHandler(email_confirmation.callback, pattern=CALLBACK_PATTERN))
     application.add_error_handler(handlers.on_error)
     return application

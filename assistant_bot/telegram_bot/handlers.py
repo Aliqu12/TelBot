@@ -26,6 +26,7 @@ from ..llm import (
     LLMUnavailableError,
 )
 from .access import AccessPolicy
+from .email_confirmation import EmailConfirmationHandlers
 from .message_split import split_message
 
 logger = logging.getLogger(__name__)
@@ -63,11 +64,13 @@ class BotHandlers:
         access: AccessPolicy,
         owner_name: str,
         max_input_chars: int,
+        email_confirmation: EmailConfirmationHandlers | None = None,
     ) -> None:
         self._assistant = assistant
         self._access = access
         self._owner_name = owner_name
         self._max_input_chars = max_input_chars
+        self._email_confirmation = email_confirmation
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user
@@ -83,13 +86,21 @@ class BotHandlers:
         message, user = update.effective_message, update.effective_user
         if message is None or user is None or not await self._authorize(user.id, message, "/help"):
             return
+        if self._email_confirmation is not None:
+            access_line = (
+                "- Ich kann dein E-Mail-Postfach lesen, durchsuchen und Entwürfe schreiben. "
+                'Versendet wird erst, wenn du beim Entwurf auf "Senden" tippst.\n'
+                "- Ich habe keinen Zugriff auf das Internet oder auf Dateien.\n\n"
+            )
+        else:
+            access_line = "- Ich habe keinen Zugriff auf das Internet oder auf Dateien.\n\n"
         await _reply(
             message,
             "So funktioniere ich:\n"
             "- Schreib mir einfach eine Textnachricht, ich antworte direkt.\n"
             "- Ich merke mir die letzten Nachrichten unseres Gesprächs, auch nach einem Neustart.\n"
-            "- Ich habe keinen Zugriff auf das Internet oder auf Dateien.\n\n"
-            "Befehle:\n"
+            + access_line
+            + "Befehle:\n"
             "/start - Begrüßung\n"
             "/help - Diese Hilfe\n"
             "/reset - Gesprächsverlauf löschen und neu beginnen\n"
@@ -142,6 +153,9 @@ class BotHandlers:
             except LLMError as exc:
                 answer = _LLM_ERROR_MESSAGES.get(type(exc), _GENERIC_ERROR_MESSAGE)
         await _reply(message, answer)
+        if self._email_confirmation is not None:
+            # Vom Modell erstellte/geänderte Entwürfe mit Freigabe-Schaltflächen anzeigen.
+            await self._email_confirmation.present_pending_draft(context.bot, chat.id)
 
     async def unsupported_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user
