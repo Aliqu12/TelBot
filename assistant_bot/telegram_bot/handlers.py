@@ -23,6 +23,7 @@ from ..llm import (
     LLMEmptyResponseError,
     LLMError,
     LLMRateLimitError,
+    LLMRequestTooLargeError,
     LLMTimeoutError,
     LLMUnavailableError,
 )
@@ -48,6 +49,10 @@ _GENERIC_ERROR_MESSAGE = "Da ist leider etwas schiefgelaufen. Bitte versuche es 
 _LLM_ERROR_MESSAGES: dict[type[LLMError], str] = {
     LLMRateLimitError: (
         "Das Anfragelimit des Sprachmodells ist gerade erreicht. Bitte warte einen Moment und versuche es dann erneut."
+    ),
+    LLMRequestTooLargeError: (
+        "Die Anfrage ist für das Sprachmodell zu groß (Token-Limit). Schick /reset, um den Verlauf zu löschen, "
+        "und versuche es dann noch einmal. Bei Bildern hilft auch ein kleineres Foto."
     ),
     LLMTimeoutError: "Das Sprachmodell hat nicht rechtzeitig geantwortet. Bitte versuche es noch einmal.",
     LLMUnavailableError: "Das Sprachmodell ist momentan nicht erreichbar. Bitte versuche es später erneut.",

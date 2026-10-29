@@ -14,6 +14,8 @@ from .mail.models import EmailValidationError, normalize_email_address
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_DATABASE_PATH = "data/assistant.db"
 DEFAULT_TIMEZONE = "Europe/Berlin"
+# Bilder kosten viele Tokens; bei Bildanfragen wird deshalb weniger Verlauf mitgesendet.
+DEFAULT_IMAGE_HISTORY_MESSAGES = 4
 # Muss zu den Providern in ``mail.factory`` passen.
 SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
 # Muss zu den Providern in ``tasks.factory`` passen.
@@ -77,6 +79,7 @@ class Settings:
     timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
     groq_image_model: str | None = None  # None = Bildverarbeitung deaktiviert
     groq_image_reasoning_effort: str | None = None  # None = Parameter wird nicht gesendet
+    image_history_max_messages: int = DEFAULT_IMAGE_HISTORY_MESSAGES  # Verlauf bei Bildanfragen
 
     @property
     def secrets(self) -> tuple[str, ...]:
@@ -196,6 +199,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         timezone=_load_timezone(reader),
         groq_image_model=image_model,
         groq_image_reasoning_effort=image_reasoning_effort,
+        image_history_max_messages=reader.integer(
+            "IMAGE_HISTORY_MAX_MESSAGES", DEFAULT_IMAGE_HISTORY_MESSAGES, 0, 200
+        ),
     )
 
     if reader.errors:

@@ -34,6 +34,10 @@ class LLMRateLimitError(LLMError):
     """Das Anfragelimit (HTTP 429) ist erreicht."""
 
 
+class LLMRequestTooLargeError(LLMError):
+    """Die Anfrage ist zu groß (HTTP 413), z. B. wegen des Token-Limits pro Minute."""
+
+
 class LLMTimeoutError(LLMError):
     """Das Modell hat nicht rechtzeitig geantwortet."""
 
@@ -143,6 +147,12 @@ class GroqChatModel:
             logger.error("Groq-Modell %r nicht gefunden (HTTP 404). Modellnamen in .env prüfen.", self._model)
             raise LLMConfigurationError() from exc
         except groq.APIStatusError as exc:
+            if exc.status_code == 413:
+                # Die Groq-Meldung nennt Limit und angefragte Tokens, enthält aber keine Nutzerdaten.
+                logger.warning(
+                    "Groq-Anfrage zu groß (HTTP 413, Modell %s): %s", self._model, _error_detail(exc)
+                )
+                raise LLMRequestTooLargeError() from exc
             if exc.status_code >= 500:
                 logger.warning("Groq-Serverfehler (HTTP %s).", exc.status_code)
                 raise LLMUnavailableError() from exc
@@ -159,6 +169,11 @@ class GroqChatModel:
 
     async def aclose(self) -> None:
         await self._client.close()
+
+
+def _error_detail(exc: groq.APIStatusError) -> str:
+    """Kurze Fehlerbeschreibung der API für das Log (Länge begrenzt)."""
+    return " ".join(str(exc.message).split())[:300]
 
 
 def _answer_text(content: str | None) -> str:

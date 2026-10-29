@@ -93,6 +93,7 @@ def main() -> int:
         tools=ToolRegistry(tools) if tools else None,
         timezone=timezone,
         image_model=image_model,
+        image_history_messages=settings.image_history_max_messages,
     )
     application = build_application(settings, assistant, email_service, task_service)
 

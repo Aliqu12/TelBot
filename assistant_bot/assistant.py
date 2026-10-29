@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, tzinfo
 
+from .config import DEFAULT_IMAGE_HISTORY_MESSAGES
 from .conversation import ConversationService
 from .llm import ChatModel
 from .messages import ChatMessage, ImageInput
@@ -19,7 +20,7 @@ from .tools import ToolRegistry
 logger = logging.getLogger(__name__)
 
 # Obergrenze für Modell-Runden mit Werkzeugaufrufen pro Nutzernachricht (Kosten-/Schleifenschutz).
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 20
 TOOL_LIMIT_MESSAGE = "Ich konnte die Anfrage nicht vollständig bearbeiten. Formuliere sie bitte etwas einfacher."
 # Platzhalter im gespeicherten Verlauf für Nachrichten mit Bild.
 IMAGE_HISTORY_PREFIX = "[Bild gesendet]"
@@ -36,9 +37,11 @@ class Assistant:
         timezone: tzinfo | None = None,
         now: Callable[[], datetime] | None = None,
         image_model: ChatModel | None = None,
+        image_history_messages: int = DEFAULT_IMAGE_HISTORY_MESSAGES,
     ) -> None:
         self._chat_model = chat_model
         self._image_model = image_model
+        self._image_history_messages = image_history_messages
         self._conversations = conversations
         self._system_prompt = system_prompt
         self._tools = tools
@@ -62,7 +65,9 @@ class Assistant:
             raise ValueError("Bildverarbeitung ist nicht aktiviert (GROQ_IMAGE_MODEL fehlt).")
         model = self._chat_model if image is None else self._image_model
         assert model is not None
-        history = await self._conversations.get_history(chat_id)
+        history = await self._conversations.get_history(
+            chat_id, limit=None if image is None else self._image_history_messages
+        )
         system_prompt = self._system_prompt
         if self._tools:
             system_prompt += "\n" + self._date_context()
