@@ -4,6 +4,9 @@
 #   Logs ansehen:           docker compose logs -f
 #   Stoppen:                docker compose down
 #
+# Standard mit neutraler Persönlichkeit (personality.md). Mit Firzana:
+#   docker compose -f compose.firzana.yaml up -d --build
+#
 # Die Werte stammen aus der Datei .env im selben Ordner (oder aus den
 # Umgebungsvariablen eines Portainer-Stacks).
 name: telegram-assistant
