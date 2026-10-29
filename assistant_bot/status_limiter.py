@@ -36,7 +36,7 @@ class StatusRateLimiter:
     async def try_acquire(self) -> bool:
         """Reserviert eine Modellanfrage. ``False`` heißt: Limit erreicht, bitte festen Text verwenden.
 
-        Datenbankfehler zählen als "nicht erlaubt", damit im Zweifel keine Groq-Anfrage gesendet wird.
+        Datenbankfehler zählen als "nicht erlaubt", damit im Zweifel keine LLM-Anfrage gesendet wird.
         """
         if self._max_calls <= 0:
             return False

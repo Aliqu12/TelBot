@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from .messages import ImageInput
 
-# Groq begrenzt Anfragen mit Base64-Bildern auf ca. 4 MB; Base64 vergrößert um ein Drittel.
-MAX_IMAGE_BYTES = 3 * 1024 * 1024
+# Standardgrenze; die tatsächliche Grenze kommt aus IMAGE_MAX_MB. Base64 vergrößert Bilder um ein Drittel,
+# und Anbieter begrenzen eingebettete Bilder unterschiedlich (Groq z. B. auf ca. 4 MB).
+DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 _SIGNATURES: tuple[tuple[bytes, str], ...] = (
     (b"\xff\xd8\xff", "image/jpeg"),
@@ -21,10 +22,10 @@ class ImageRejectedError(Exception):
     """Das Bild ist zu groß oder hat ein nicht unterstütztes Format (Meldung für den Nutzer)."""
 
 
-def too_large_message(size: int) -> str:
+def too_large_message(size: int, max_bytes: int = DEFAULT_MAX_IMAGE_BYTES) -> str:
     return (
         f"Das Bild ist mit {size / 1024 / 1024:.1f} MB zu groß (höchstens "
-        f"{MAX_IMAGE_BYTES // 1024 // 1024} MB). Schick es bitte als normales Foto statt als Datei, "
+        f"{max_bytes / 1024 / 1024:g} MB). Schick es bitte als normales Foto statt als Datei, "
         "dann verkleinert Telegram es automatisch."
     )
 
@@ -38,7 +39,7 @@ def detect_mime_type(data: bytes) -> str | None:
     return None
 
 
-def load_image(data: bytes) -> ImageInput:
+def load_image(data: bytes, max_bytes: int = DEFAULT_MAX_IMAGE_BYTES) -> ImageInput:
     """Prüft Größe und Format und liefert ein ``ImageInput``.
 
     Raises:
@@ -46,8 +47,8 @@ def load_image(data: bytes) -> ImageInput:
     """
     if not data:
         raise ImageRejectedError("Das Bild ist leer.")
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ImageRejectedError(too_large_message(len(data)))
+    if len(data) > max_bytes:
+        raise ImageRejectedError(too_large_message(len(data), max_bytes))
     mime_type = detect_mime_type(data)
     if mime_type is None:
         raise ImageRejectedError(

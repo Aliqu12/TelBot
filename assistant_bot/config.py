@@ -11,11 +11,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .mail.models import EmailValidationError, normalize_email_address
 
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+DEFAULT_LLM_PROVIDER = "openrouter"
 DEFAULT_DATABASE_PATH = "data/assistant.db"
 DEFAULT_TIMEZONE = "Europe/Berlin"
 # Bilder kosten viele Tokens; bei Bildanfragen wird deshalb weniger Verlauf mitgesendet.
 DEFAULT_IMAGE_HISTORY_MESSAGES = 4
+# Größte erlaubte Bilddatei in MB (Telegram liefert Dateien für Bots nur bis 20 MB aus).
+DEFAULT_IMAGE_MAX_MB = 5
+MAX_IMAGE_MB_LIMIT = 20
 # Wie oft Start-/Stoppmeldungen pro Minute das Sprachmodell nutzen dürfen; danach gibt es nur feste Texte.
 DEFAULT_STATUS_LLM_MAX_PER_MINUTE = 2
 _TRUE_VALUES = ("true", "1", "yes", "ja", "on")
@@ -25,8 +28,10 @@ SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
 # Muss zu den Providern in ``tasks.factory`` passen.
 SUPPORTED_TASK_PROVIDERS = ("todoist",)
 
-# Werte für Groqs ``reasoning_effort`` bei Bildanfragen ("none" = Instruct-Modus ohne Denkphase).
-IMAGE_REASONING_EFFORTS = ("none", "default", "low", "medium", "high")
+# Anbieter für das Sprachmodell; muss zu ``llm.factory.PROVIDERS`` passen.
+SUPPORTED_LLM_PROVIDERS = ("openrouter", "groq")
+# Umgebungsvariable mit dem API-Key je Anbieter (nur der Key des gewählten Anbieters ist Pflicht).
+LLM_API_KEY_VARIABLES = {"openrouter": "OPENROUTER_API_KEY", "groq": "GROQ_API_KEY"}
 
 _TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{30,}$")
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -66,14 +71,15 @@ class Settings:
 
     # repr=False verhindert, dass Geheimnisse versehentlich in Logs landen.
     telegram_bot_token: str = field(repr=False)
-    groq_api_key: str = field(repr=False)
+    llm_provider: str
+    llm_api_key: str = field(repr=False)
     allowed_telegram_user_id: int | None
     owner_name: str
-    groq_model: str
-    groq_temperature: float
-    groq_max_completion_tokens: int
-    groq_timeout_seconds: float
-    groq_max_retries: int
+    llm_model: str
+    llm_temperature: float
+    llm_max_tokens: int
+    llm_timeout_seconds: float
+    llm_max_retries: int
     database_path: Path
     history_max_messages: int
     max_input_chars: int
@@ -81,16 +87,20 @@ class Settings:
     email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
     tasks: TaskSettings | None = None  # None = Aufgaben-Integration deaktiviert
     timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
-    groq_image_model: str | None = None  # None = Bildverarbeitung deaktiviert
-    groq_image_reasoning_effort: str | None = None  # None = Parameter wird nicht gesendet
+    llm_image_model: str | None = None  # None = Bilder gehen an das Textmodell (llm_model)
+    image_max_mb: int = DEFAULT_IMAGE_MAX_MB
     image_history_max_messages: int = DEFAULT_IMAGE_HISTORY_MESSAGES  # Verlauf bei Bildanfragen
     status_messages_enabled: bool = True  # Begrüßung beim Start und Abschied beim Beenden
     status_llm_max_per_minute: int = DEFAULT_STATUS_LLM_MAX_PER_MINUTE  # 0 = immer feste Texte
 
     @property
+    def image_max_bytes(self) -> int:
+        return self.image_max_mb * 1024 * 1024
+
+    @property
     def secrets(self) -> tuple[str, ...]:
         """Werte, die niemals im Klartext geloggt werden dürfen."""
-        secrets = (self.telegram_bot_token, self.groq_api_key)
+        secrets = (self.telegram_bot_token, self.llm_api_key)
         if self.email is not None:
             secrets += (self.email.app_password,)
         if self.tasks is not None:
@@ -118,6 +128,12 @@ class _EnvReader:
 
     def text(self, name: str, default: str) -> str:
         return self.raw(name) or default
+
+    def required_text(self, name: str) -> str:
+        value = self.raw(name)
+        if not value:
+            self.errors.append(f"{name} fehlt (Pflichtwert, z. B. 'openai/gpt-oss-120b').")
+        return value
 
     def boolean(self, name: str, default: bool) -> bool:
         raw = self.raw(name).lower()
@@ -185,7 +201,15 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         reader.errors.append(
             "TELEGRAM_BOT_TOKEN hat kein gültiges Format (erwartet: '<Zahl>:<Geheimnis>' von @BotFather)."
         )
-    groq_api_key = reader.required_secret("GROQ_API_KEY")
+    llm_provider = reader.text("LLM_PROVIDER", DEFAULT_LLM_PROVIDER).lower()
+    if llm_provider not in SUPPORTED_LLM_PROVIDERS:
+        reader.errors.append(
+            f"LLM_PROVIDER {llm_provider!r} wird nicht unterstützt (möglich: {', '.join(SUPPORTED_LLM_PROVIDERS)})."
+        )
+        llm_api_key = ""
+    else:
+        llm_api_key = reader.required_secret(LLM_API_KEY_VARIABLES[llm_provider])
+    llm_model = reader.required_text("LLM_MODEL")
 
     log_level = reader.text("LOG_LEVEL", "INFO").upper()
     if log_level not in _LOG_LEVELS:
@@ -195,18 +219,17 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if len(owner_name) > 100:
         reader.errors.append("OWNER_NAME darf höchstens 100 Zeichen lang sein.")
 
-    image_model, image_reasoning_effort = _load_image_model(reader)
-
     settings = Settings(
         telegram_bot_token=telegram_bot_token,
-        groq_api_key=groq_api_key,
+        llm_provider=llm_provider,
+        llm_api_key=llm_api_key,
         allowed_telegram_user_id=reader.optional_user_id("ALLOWED_TELEGRAM_USER_ID"),
         owner_name=owner_name,
-        groq_model=reader.text("GROQ_MODEL", DEFAULT_GROQ_MODEL),
-        groq_temperature=reader.number("GROQ_TEMPERATURE", 0.7, 0.0, 2.0),
-        groq_max_completion_tokens=reader.integer("GROQ_MAX_COMPLETION_TOKENS", 2048, 64, 32768),
-        groq_timeout_seconds=reader.number("GROQ_TIMEOUT_SECONDS", 60.0, 1.0, 600.0),
-        groq_max_retries=reader.integer("GROQ_MAX_RETRIES", 2, 0, 10),
+        llm_model=llm_model,
+        llm_temperature=reader.number("LLM_TEMPERATURE", 0.7, 0.0, 2.0),
+        llm_max_tokens=reader.integer("LLM_MAX_TOKENS", 2048, 64, 32768),
+        llm_timeout_seconds=reader.number("LLM_TIMEOUT_SECONDS", 60.0, 1.0, 600.0),
+        llm_max_retries=reader.integer("LLM_MAX_RETRIES", 2, 0, 10),
         database_path=Path(reader.text("DATABASE_PATH", DEFAULT_DATABASE_PATH)),
         history_max_messages=reader.integer("HISTORY_MAX_MESSAGES", 20, 1, 200),
         max_input_chars=reader.integer("MAX_INPUT_CHARS", 4000, 1, 4096),
@@ -214,8 +237,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         email=_load_email_settings(reader, owner_name),
         tasks=_load_task_settings(reader),
         timezone=_load_timezone(reader),
-        groq_image_model=image_model,
-        groq_image_reasoning_effort=image_reasoning_effort,
+        llm_image_model=reader.raw("LLM_IMAGE_MODEL") or None,
+        image_max_mb=reader.integer("IMAGE_MAX_MB", DEFAULT_IMAGE_MAX_MB, 1, MAX_IMAGE_MB_LIMIT),
         image_history_max_messages=reader.integer(
             "IMAGE_HISTORY_MAX_MESSAGES", DEFAULT_IMAGE_HISTORY_MESSAGES, 0, 200
         ),
@@ -268,22 +291,6 @@ def _load_email_settings(reader: _EnvReader, owner_name: str) -> EmailSettings |
         timeout_seconds=reader.number("EMAIL_TIMEOUT_SECONDS", 30.0, 5.0, 300.0),
         max_body_chars=reader.integer("EMAIL_MAX_BODY_CHARS", 6000, 500, 50000),
     )
-
-
-def _load_image_model(reader: _EnvReader) -> tuple[str | None, str | None]:
-    model = reader.raw("GROQ_IMAGE_MODEL") or None
-    effort = reader.raw("GROQ_IMAGE_REASONING_EFFORT").lower() or None
-    if effort is not None and effort not in IMAGE_REASONING_EFFORTS:
-        reader.errors.append(
-            f"GROQ_IMAGE_REASONING_EFFORT muss einer der Werte {', '.join(IMAGE_REASONING_EFFORTS)} sein "
-            "(oder leer)."
-        )
-    if model is None:
-        return None, None
-    if effort is None and model.lower().startswith("qwen/"):
-        # Qwen denkt sonst vor jeder Antwort ausführlich nach (langsamer, teurer, kann die Antwort abschneiden).
-        effort = "none"
-    return model, effort
 
 
 def _load_timezone(reader: _EnvReader) -> str:

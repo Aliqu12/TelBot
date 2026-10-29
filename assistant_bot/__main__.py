@@ -14,7 +14,7 @@ from telegram.error import InvalidToken
 from .assistant import Assistant
 from .config import ConfigError, load_settings
 from .conversation import ConversationService
-from .llm import create_groq_chat_model, create_groq_image_model
+from .llm import create_chat_model, create_image_model
 from .logging_config import configure_logging
 from .mail.factory import create_email_provider
 from .mail.service import EmailService
@@ -43,9 +43,10 @@ def main() -> int:
 
     configure_logging(settings.log_level, secrets=settings.secrets)
     logger.info(
-        "Starte Assistent (Modell=%s, Bildmodell=%s, Kontext=%d Nachrichten, Datenbank=%s)",
-        settings.groq_model,
-        settings.groq_image_model or "deaktiviert",
+        "Starte Assistent (Anbieter=%s, Modell=%s, Bildmodell=%s, Kontext=%d Nachrichten, Datenbank=%s)",
+        settings.llm_provider,
+        settings.llm_model,
+        settings.llm_image_model or "wie Textmodell",
         settings.history_max_messages,
         settings.database_path,
     )
@@ -81,9 +82,10 @@ def main() -> int:
             "Aufgaben-Integration aktiv (Provider=%s, Zeitzone=%s).", task_service.provider_name, settings.timezone
         )
 
-    image_model = create_groq_image_model(settings)
+    chat_model = create_chat_model(settings)
+    image_model = create_image_model(settings, chat_model)
     assistant = Assistant(
-        chat_model=create_groq_chat_model(settings),
+        chat_model=chat_model,
         conversations=conversations,
         system_prompt=build_system_prompt(
             settings.owner_name,
