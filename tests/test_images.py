@@ -15,61 +15,25 @@ from telegram.error import NetworkError
 from assistant_bot.assistant import IMAGE_HISTORY_PREFIX, Assistant
 from assistant_bot.config import ConfigError, load_settings
 from assistant_bot.conversation import ConversationService
-from assistant_bot.images import MAX_IMAGE_BYTES, ImageRejectedError, detect_mime_type, load_image
-from assistant_bot.llm import LLMError, LLMRateLimitError, LLMRequestTooLargeError, ModelTurn, create_groq_image_model
+from assistant_bot.images import DEFAULT_MAX_IMAGE_BYTES, ImageRejectedError, detect_mime_type, load_image
+from assistant_bot.llm import (
+    LLMError,
+    LLMInsufficientCreditsError,
+    LLMRateLimitError,
+    LLMRequestTooLargeError,
+    ModelTurn,
+)
 from assistant_bot.messages import ChatMessage, ImageInput, ToolCall
 from assistant_bot.prompts import build_system_prompt
 from assistant_bot.telegram_bot.access import AccessPolicy
 from assistant_bot.telegram_bot.handlers import DEFAULT_IMAGE_PROMPT, IMAGES_DISABLED_MESSAGE, BotHandlers
 from assistant_bot.tools import Tool, ToolRegistry
-from tests.test_llm import completion, make_model
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 WEBP = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 20
 OWNER = 1001
 STRANGER = 2002
-
-
-# --- Konfiguration ------------------------------------------------------------
-
-
-def test_image_model_is_disabled_by_default(valid_env: dict[str, str]) -> None:
-    settings = load_settings(valid_env)
-
-    assert settings.groq_image_model is None
-    assert settings.groq_image_reasoning_effort is None
-    assert create_groq_image_model(settings) is None
-
-
-def test_qwen_image_model_defaults_to_instruct_mode(valid_env: dict[str, str]) -> None:
-    settings = load_settings(
-        {**valid_env, "GROQ_MODEL": "openai/gpt-oss-120b", "GROQ_IMAGE_MODEL": "qwen/qwen3.8-27b"}
-    )
-
-    assert settings.groq_model == "openai/gpt-oss-120b"
-    assert settings.groq_image_model == "qwen/qwen3.8-27b"
-    assert settings.groq_image_reasoning_effort == "none"
-    model = create_groq_image_model(settings)
-    assert model is not None
-    assert model._model == "qwen/qwen3.8-27b"
-    assert model._extra_params == {"reasoning_effort": "none"}
-    asyncio.run(model.aclose())
-
-
-def test_reasoning_effort_can_be_set_or_is_omitted_for_other_models(valid_env: dict[str, str]) -> None:
-    explicit = load_settings(
-        {**valid_env, "GROQ_IMAGE_MODEL": "qwen/qwen3.8-27b", "GROQ_IMAGE_REASONING_EFFORT": "LOW"}
-    )
-    other = load_settings({**valid_env, "GROQ_IMAGE_MODEL": "meta-llama/some-vision-model"})
-
-    assert explicit.groq_image_reasoning_effort == "low"
-    assert other.groq_image_reasoning_effort is None
-
-
-def test_invalid_reasoning_effort_is_rejected(valid_env: dict[str, str]) -> None:
-    with pytest.raises(ConfigError, match="GROQ_IMAGE_REASONING_EFFORT"):
-        load_settings({**valid_env, "GROQ_IMAGE_MODEL": "qwen/x", "GROQ_IMAGE_REASONING_EFFORT": "maximal"})
 
 
 # --- Bildprüfung und Nachrichtenformat ----------------------------------------
@@ -87,13 +51,21 @@ def test_supported_formats_are_detected_by_signature(data: bytes, mime: str) -> 
         (b"", "leer"),
         (b"GIF89a" + b"\x00" * 10, "Bildformat"),
         (b"<svg xmlns='http://www.w3.org/2000/svg'/>", "Bildformat"),
-        (JPEG + b"\x00" * MAX_IMAGE_BYTES, "zu groß"),
+        (JPEG + b"\x00" * DEFAULT_MAX_IMAGE_BYTES, "zu groß"),
     ],
     ids=["empty", "gif", "svg", "too-large"],
 )
 def test_invalid_images_are_rejected(data: bytes, fragment: str) -> None:
     with pytest.raises(ImageRejectedError, match=fragment):
         load_image(data)
+
+
+def test_image_size_limit_is_configurable() -> None:
+    data = JPEG + b"\x00" * (2 * 1024 * 1024)
+
+    assert load_image(data).mime_type == "image/jpeg"  # unter dem Standard von 5 MB
+    with pytest.raises(ImageRejectedError, match=r"höchstens 1 MB"):
+        load_image(data, max_bytes=1024 * 1024)
 
 
 def test_image_message_is_sent_as_text_plus_data_url() -> None:
@@ -108,26 +80,6 @@ def test_image_message_is_sent_as_text_plus_data_url() -> None:
     }
     assert ChatMessage("user", "Hallo").to_api_dict() == {"role": "user", "content": "Hallo"}
     assert "\\xff" not in repr(message.images[0])
-
-
-# --- LLM-Service ----------------------------------------------------------------
-
-
-def test_extra_params_are_sent_and_reasoning_is_stripped() -> None:
-    model, create = make_model(result=completion("<think>Ich überlege …</think>\n\nRechnung Nr. 4711"))
-    model._extra_params = {"reasoning_effort": "none"}
-
-    answer = asyncio.run(model.complete([ChatMessage("user", "Lies das")]))
-
-    assert answer == "Rechnung Nr. 4711"
-    assert create.await_args.kwargs["reasoning_effort"] == "none"
-
-
-def test_truncated_reasoning_only_counts_as_empty_answer() -> None:
-    model, _ = make_model(result=completion("<think>Ich überlege und werde abgeschnit", "length"))
-
-    with pytest.raises(LLMError):
-        asyncio.run(model.complete([ChatMessage("user", "Lies das")]))
 
 
 # --- Assistent ----------------------------------------------------------------
@@ -218,6 +170,19 @@ def test_image_without_image_model_is_refused(tmp_path: Path) -> None:
         asyncio.run(assistant.reply(OWNER, "?", image=load_image(JPEG)))
 
 
+def test_shared_text_and_image_model_is_closed_only_once(tmp_path: Path) -> None:
+    conversations = ConversationService(tmp_path / "test.db", 20)
+    conversations.initialize()
+    model = RecordingModel("x")
+    model.aclose = AsyncMock()  # type: ignore[method-assign]
+    assistant = Assistant(model, conversations, "SYSTEM", image_model=model)  # type: ignore[arg-type]
+
+    assert assistant.supports_images
+    asyncio.run(assistant.aclose())
+
+    model.aclose.assert_awaited_once()
+
+
 def test_image_requests_send_less_history_than_text_requests(tmp_path: Path) -> None:
     assistant, text_model, image_model, conversations = make_assistant(tmp_path)
     for number in range(6):
@@ -278,11 +243,17 @@ def image_update(
     )
 
 
-def make_handlers(*, images: bool = True) -> tuple[BotHandlers, MagicMock]:
+def make_handlers(*, images: bool = True, max_image_bytes: int = DEFAULT_MAX_IMAGE_BYTES) -> tuple[BotHandlers, MagicMock]:
     assistant = MagicMock()
     assistant.supports_images = images
     assistant.reply = AsyncMock(return_value="Bild-Antwort")
-    handlers = BotHandlers(assistant=assistant, access=AccessPolicy(OWNER), owner_name="Ali", max_input_chars=100)
+    handlers = BotHandlers(
+        assistant=assistant,
+        access=AccessPolicy(OWNER),
+        owner_name="Ali",
+        max_input_chars=100,
+        max_image_bytes=max_image_bytes,
+    )
     return handlers, assistant
 
 
@@ -346,7 +317,7 @@ def test_images_disabled_message() -> None:
 
 def test_too_large_file_is_rejected_before_download() -> None:
     handlers, assistant = make_handlers()
-    document = SimpleNamespace(file_size=MAX_IMAGE_BYTES + 1, get_file=AsyncMock())
+    document = SimpleNamespace(file_size=DEFAULT_MAX_IMAGE_BYTES + 1, get_file=AsyncMock())
     update = image_update(document=document)
 
     asyncio.run(handlers.image_message(update, context()))  # type: ignore[arg-type]
@@ -354,6 +325,22 @@ def test_too_large_file_is_rejected_before_download() -> None:
     document.get_file.assert_not_awaited()
     assistant.reply.assert_not_awaited()
     assert "zu groß" in replies(update)[0]
+
+
+def test_configured_image_limit_is_applied_before_and_after_download() -> None:
+    handlers, assistant = make_handlers(max_image_bytes=1024)
+    announced = SimpleNamespace(file_size=2048, get_file=AsyncMock())
+    understated = SimpleNamespace(file_size=100, get_file=AsyncMock(return_value=telegram_file(JPEG + b"\x00" * 2048)))
+    too_big = image_update(document=announced)
+    liar = image_update(document=understated)
+
+    asyncio.run(handlers.image_message(too_big, context()))  # type: ignore[arg-type]
+    asyncio.run(handlers.image_message(liar, context()))  # type: ignore[arg-type]
+
+    announced.get_file.assert_not_awaited()
+    assistant.reply.assert_not_awaited()
+    assert "zu groß" in replies(too_big)[0]
+    assert "zu groß" in replies(liar)[0]
 
 
 def test_unsupported_content_and_download_errors_are_reported() -> None:
@@ -388,6 +375,16 @@ def test_llm_errors_on_images_are_translated() -> None:
     assert "Anfragelimit" in replies(rate_limited)[0]
     assert "Das Bild konnte nicht verarbeitet werden" in replies(rejected)[0]
     assert "/reset" in replies(too_large)[0]
+
+
+def test_empty_credits_get_their_own_message() -> None:
+    handlers, assistant = make_handlers()
+    assistant.reply.side_effect = LLMInsufficientCreditsError()
+    update = image_update(photo=[photo_size(100)])
+
+    asyncio.run(handlers.image_message(update, context()))  # type: ignore[arg-type]
+
+    assert "Guthaben" in replies(update)[0]
 
 
 def test_too_long_caption_is_rejected() -> None:

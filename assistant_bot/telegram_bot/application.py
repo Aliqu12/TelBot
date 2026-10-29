@@ -66,7 +66,7 @@ async def notify_owner(
         return
     text = fallback
     if limiter is not None and not await limiter.try_acquire():
-        logger.info("Limit für KI-Statusmeldungen erreicht, sende festen Text ohne Groq-Anfrage.")
+        logger.info("Limit für KI-Statusmeldungen erreicht, sende festen Text ohne LLM-Anfrage.")
     else:
         try:
             generated = (await asyncio.wait_for(assistant.announce(instruction), timeout)).strip()
@@ -103,6 +103,7 @@ def build_application(
         access=access,
         owner_name=settings.owner_name,
         max_input_chars=settings.max_input_chars,
+        max_image_bytes=settings.image_max_bytes,
         email_confirmation=email_confirmation,
         task_confirmation=task_confirmation,
     )

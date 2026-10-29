@@ -17,11 +17,12 @@ from telegram.error import NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
 from ..assistant import Assistant
-from ..images import MAX_IMAGE_BYTES, ImageRejectedError, load_image, too_large_message
+from ..images import DEFAULT_MAX_IMAGE_BYTES, ImageRejectedError, load_image, too_large_message
 from ..llm import (
     LLMConfigurationError,
     LLMEmptyResponseError,
     LLMError,
+    LLMInsufficientCreditsError,
     LLMRateLimitError,
     LLMRequestTooLargeError,
     LLMTimeoutError,
@@ -51,8 +52,11 @@ _LLM_ERROR_MESSAGES: dict[type[LLMError], str] = {
         "Das Anfragelimit des Sprachmodells ist gerade erreicht. Bitte warte einen Moment und versuche es dann erneut."
     ),
     LLMRequestTooLargeError: (
-        "Die Anfrage ist für das Sprachmodell zu groß (Token-Limit). Schick /reset, um den Verlauf zu löschen, "
+        "Die Anfrage ist für das Sprachmodell zu groß. Schick /reset, um den Verlauf zu löschen, "
         "und versuche es dann noch einmal. Bei Bildern hilft auch ein kleineres Foto."
+    ),
+    LLMInsufficientCreditsError: (
+        "Das Guthaben beim Sprachmodell-Anbieter ist aufgebraucht. Es muss erst wieder aufgeladen werden."
     ),
     LLMTimeoutError: "Das Sprachmodell hat nicht rechtzeitig geantwortet. Bitte versuche es noch einmal.",
     LLMUnavailableError: "Das Sprachmodell ist momentan nicht erreichbar. Bitte versuche es später erneut.",
@@ -66,9 +70,7 @@ _LLM_ERROR_MESSAGES: dict[type[LLMError], str] = {
 DEFAULT_IMAGE_PROMPT = (
     "Was ist auf diesem Bild zu sehen? Falls es Text enthält, gib den Text vollständig und wortgetreu wieder."
 )
-IMAGES_DISABLED_MESSAGE = (
-    "Bilder kann ich noch nicht verarbeiten. Dazu muss GROQ_IMAGE_MODEL in der Konfiguration gesetzt sein."
-)
+IMAGES_DISABLED_MESSAGE = "Bilder kann ich im Moment nicht verarbeiten."
 _IMAGE_DOWNLOAD_ERROR = "Ich konnte das Bild nicht von Telegram laden. Bitte schick es noch einmal."
 _IMAGE_LLM_ERROR = (
     "Das Bild konnte nicht verarbeitet werden. Versuch es bitte mit einem anderen Foto oder schick es "
@@ -84,6 +86,7 @@ class BotHandlers:
         access: AccessPolicy,
         owner_name: str,
         max_input_chars: int,
+        max_image_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
         email_confirmation: EmailConfirmationHandlers | None = None,
         task_confirmation: TaskConfirmationHandlers | None = None,
     ) -> None:
@@ -91,6 +94,7 @@ class BotHandlers:
         self._access = access
         self._owner_name = owner_name
         self._max_input_chars = max_input_chars
+        self._max_image_bytes = max_image_bytes
         self._email_confirmation = email_confirmation
         self._task_confirmation = task_confirmation
 
@@ -210,8 +214,8 @@ class BotHandlers:
         attachment = message.photo[-1] if message.photo else message.document
         if attachment is None:
             return
-        if attachment.file_size and attachment.file_size > MAX_IMAGE_BYTES:
-            await _reply(message, too_large_message(attachment.file_size))
+        if attachment.file_size and attachment.file_size > self._max_image_bytes:
+            await _reply(message, too_large_message(attachment.file_size, self._max_image_bytes))
             return
 
         async with _typing_indicator(context.bot, chat.id):
@@ -223,7 +227,7 @@ class BotHandlers:
                 await _reply(message, _IMAGE_DOWNLOAD_ERROR)
                 return
             try:
-                image = load_image(data)
+                image = load_image(data, self._max_image_bytes)
             except ImageRejectedError as exc:
                 logger.info("Bild abgelehnt (%d Bytes): %s", len(data), exc)
                 await _reply(message, str(exc))

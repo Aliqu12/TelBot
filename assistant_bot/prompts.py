@@ -1,7 +1,7 @@
 """Zentrale Prompt-Definitionen.
 
 Hier kann die Persönlichkeit des Assistenten angepasst oder erweitert werden,
-ohne die Telegram- oder Groq-Integration zu verändern.
+ohne die Telegram- oder LLM-Integration zu verändern.
 """
 
 from __future__ import annotations

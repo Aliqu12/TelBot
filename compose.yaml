@@ -17,17 +17,20 @@ services:
     environment:
       # ":?" bricht mit einer klaren Meldung ab, falls ein Pflichtwert fehlt.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN fehlt in .env}
-      GROQ_API_KEY: ${GROQ_API_KEY:?GROQ_API_KEY fehlt in .env}
+      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL fehlt in .env}
+      # Nur der Key des gewählten Anbieters ist Pflicht (wird beim Start geprüft).
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       ALLOWED_TELEGRAM_USER_ID: ${ALLOWED_TELEGRAM_USER_ID:-}
       OWNER_NAME: ${OWNER_NAME:-Ali}
-      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
-      GROQ_TEMPERATURE: ${GROQ_TEMPERATURE:-0.7}
-      GROQ_MAX_COMPLETION_TOKENS: ${GROQ_MAX_COMPLETION_TOKENS:-2048}
-      GROQ_TIMEOUT_SECONDS: ${GROQ_TIMEOUT_SECONDS:-60}
-      GROQ_MAX_RETRIES: ${GROQ_MAX_RETRIES:-2}
-      # Bilder (optional, leer = deaktiviert)
-      GROQ_IMAGE_MODEL: ${GROQ_IMAGE_MODEL:-}
-      GROQ_IMAGE_REASONING_EFFORT: ${GROQ_IMAGE_REASONING_EFFORT:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      # Bilder (leer = das Textmodell verarbeitet auch Bilder)
+      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
+      IMAGE_MAX_MB: ${IMAGE_MAX_MB:-5}
       HISTORY_MAX_MESSAGES: ${HISTORY_MAX_MESSAGES:-20}
       IMAGE_HISTORY_MAX_MESSAGES: ${IMAGE_HISTORY_MAX_MESSAGES:-4}
       STATUS_MESSAGES_ENABLED: ${STATUS_MESSAGES_ENABLED:-true}

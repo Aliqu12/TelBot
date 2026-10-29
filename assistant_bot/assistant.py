@@ -2,7 +2,7 @@
 
 Diese Klasse ist bewusst unabhängig von Telegram. Zukünftige Funktionen
 (Tools, Erinnerungen, Homeserver-Integrationen) können hier ansetzen, ohne
-die Telegram- oder Groq-Anbindung zu verändern.
+die Telegram- oder LLM-Anbindung zu verändern.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ class Assistant:
         nicht gespeichert, im Verlauf steht nur ein Platzhalter mit dem Text.
         """
         if image is not None and self._image_model is None:
-            raise ValueError("Bildverarbeitung ist nicht aktiviert (GROQ_IMAGE_MODEL fehlt).")
+            raise ValueError("Bildverarbeitung ist nicht aktiviert (kein Bildmodell konfiguriert).")
         model = self._chat_model if image is None else self._image_model
         assert model is not None
         history = await self._conversations.get_history(
@@ -134,5 +134,5 @@ class Assistant:
 
     async def aclose(self) -> None:
         await self._chat_model.aclose()
-        if self._image_model is not None:
+        if self._image_model is not None and self._image_model is not self._chat_model:
             await self._image_model.aclose()

@@ -1,4 +1,4 @@
-"""Tests für Tool Calling: Werkzeug-Registry, E-Mail-Werkzeuge, Assistent-Schleife und Groq-Anbindung.
+"""Tests für Tool Calling: Werkzeug-Registry, E-Mail-Werkzeuge, Assistent-Schleife und LLM-Anbindung.
 
 Sprachmodell und Mailserver sind vollständig gefälscht.
 """
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 from assistant_bot.assistant import MAX_TOOL_ROUNDS, TOOL_LIMIT_MESSAGE, Assistant
 from assistant_bot.conversation import ConversationService
-from assistant_bot.llm import GroqChatModel, ModelTurn
+from assistant_bot.llm import ModelTurn, OpenAICompatibleChatModel
 from assistant_bot.mail.models import EmailCapability, EmailMessage
 from assistant_bot.mail.service import EmailService
 from assistant_bot.mail.tools import UNTRUSTED_END, build_email_tools
@@ -236,17 +236,17 @@ def test_injected_send_request_cannot_send(tmp_path: Path) -> None:
     assert service.current_draft(CHAT) is not None  # nur Entwurf, Freigabe durch Nutzer nötig
 
 
-# --- Groq-Anbindung -----------------------------------------------------------
+# --- Anbindung an das Sprachmodell ---------------------------------------------
 
 
-def test_groq_complete_with_tools_parses_tool_calls() -> None:
+def test_complete_with_tools_parses_tool_calls() -> None:
     tool_call = SimpleNamespace(id="call_1", function=SimpleNamespace(name="list_emails", arguments='{"limit": 3}'))
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[tool_call]), finish_reason="tool_calls")]
     )
     create = AsyncMock(return_value=response)
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)), close=AsyncMock())
-    model = GroqChatModel(client, model="m", temperature=0.5, max_completion_tokens=100)  # type: ignore[arg-type]
+    model = OpenAICompatibleChatModel(client, model="m", temperature=0.5, max_tokens=100)  # type: ignore[arg-type]
     specs = [{"type": "function", "function": {"name": "list_emails", "parameters": {"type": "object"}}}]
     messages = [
         ChatMessage("user", "Hi"),
