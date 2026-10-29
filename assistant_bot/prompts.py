@@ -97,6 +97,23 @@ def build_system_prompt(
     return prompt
 
 
+# Anweisungen für Start-/Stoppmeldungen. Sie werden als Nutzernachricht ohne Verlauf an das Modell gesendet,
+# das Ergebnis klingt dadurch jedes Mal anders, aber immer nach Firzana.
+STARTUP_INSTRUCTION = (
+    "[Systemereignis, keine Nachricht von {owner_name}] Du wurdest gerade gestartet und bist jetzt online. "
+    "Schreibe {owner_name} eine kurze, persönliche Begrüßung in 1 bis 2 Sätzen: Begrüße passend zur Tageszeit "
+    "und sage, dass du startklar bist. Formuliere jedes Mal anders. Schreibe nur die Nachricht selbst, "
+    "ohne Erklärung davor oder danach."
+)
+SHUTDOWN_INSTRUCTION = (
+    "[Systemereignis, keine Nachricht von {owner_name}] Du wirst gleich heruntergefahren oder neu gestartet "
+    "und bist deshalb kurz nicht erreichbar. Schreibe {owner_name} eine kurze Verabschiedung in 1 bis 2 "
+    "Sätzen: Sage, dass du kurz weg bist (z. B. AFK oder verhindert, gern locker formuliert) und dich meldest, "
+    "sobald du wieder da bist. Erfinde keine konkreten Gründe oder Zeitangaben. Formuliere jedes Mal anders. "
+    "Schreibe nur die Nachricht selbst, ohne Erklärung davor oder danach."
+)
+
+
 IMAGE_PROMPT_ADDENDUM = """
 Bilder:
 - {owner_name} kann dir Fotos schicken. Die Bildunterschrift ist seine Frage oder Bitte dazu.

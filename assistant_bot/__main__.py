@@ -20,6 +20,7 @@ from .mail.factory import create_email_provider
 from .mail.service import EmailService
 from .mail.tools import build_email_tools
 from .prompts import build_system_prompt
+from .status_limiter import StatusRateLimiter
 from .tasks.factory import create_task_provider
 from .tasks.service import TaskService
 from .tasks.tools import build_task_tools
@@ -95,7 +96,13 @@ def main() -> int:
         image_model=image_model,
         image_history_messages=settings.image_history_max_messages,
     )
-    application = build_application(settings, assistant, email_service, task_service)
+    application = build_application(
+        settings,
+        assistant,
+        email_service,
+        task_service,
+        StatusRateLimiter(settings.database_path, settings.status_llm_max_per_minute),
+    )
 
     try:
         # Long Polling; beendet sich sauber bei SIGINT/SIGTERM (z. B. docker stop).

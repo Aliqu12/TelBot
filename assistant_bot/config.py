@@ -16,6 +16,10 @@ DEFAULT_DATABASE_PATH = "data/assistant.db"
 DEFAULT_TIMEZONE = "Europe/Berlin"
 # Bilder kosten viele Tokens; bei Bildanfragen wird deshalb weniger Verlauf mitgesendet.
 DEFAULT_IMAGE_HISTORY_MESSAGES = 4
+# Wie oft Start-/Stoppmeldungen pro Minute das Sprachmodell nutzen dürfen; danach gibt es nur feste Texte.
+DEFAULT_STATUS_LLM_MAX_PER_MINUTE = 2
+_TRUE_VALUES = ("true", "1", "yes", "ja", "on")
+_FALSE_VALUES = ("false", "0", "no", "nein", "off")
 # Muss zu den Providern in ``mail.factory`` passen.
 SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
 # Muss zu den Providern in ``tasks.factory`` passen.
@@ -80,6 +84,8 @@ class Settings:
     groq_image_model: str | None = None  # None = Bildverarbeitung deaktiviert
     groq_image_reasoning_effort: str | None = None  # None = Parameter wird nicht gesendet
     image_history_max_messages: int = DEFAULT_IMAGE_HISTORY_MESSAGES  # Verlauf bei Bildanfragen
+    status_messages_enabled: bool = True  # Begrüßung beim Start und Abschied beim Beenden
+    status_llm_max_per_minute: int = DEFAULT_STATUS_LLM_MAX_PER_MINUTE  # 0 = immer feste Texte
 
     @property
     def secrets(self) -> tuple[str, ...]:
@@ -112,6 +118,17 @@ class _EnvReader:
 
     def text(self, name: str, default: str) -> str:
         return self.raw(name) or default
+
+    def boolean(self, name: str, default: bool) -> bool:
+        raw = self.raw(name).lower()
+        if not raw:
+            return default
+        if raw in _TRUE_VALUES:
+            return True
+        if raw in _FALSE_VALUES:
+            return False
+        self.errors.append(f"{name} muss true oder false sein (erhalten: {raw!r}).")
+        return default
 
     def integer(self, name: str, default: int, minimum: int, maximum: int) -> int:
         raw = self.raw(name)
@@ -201,6 +218,10 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         groq_image_reasoning_effort=image_reasoning_effort,
         image_history_max_messages=reader.integer(
             "IMAGE_HISTORY_MAX_MESSAGES", DEFAULT_IMAGE_HISTORY_MESSAGES, 0, 200
+        ),
+        status_messages_enabled=reader.boolean("STATUS_MESSAGES_ENABLED", True),
+        status_llm_max_per_minute=reader.integer(
+            "STATUS_LLM_MAX_PER_MINUTE", DEFAULT_STATUS_LLM_MAX_PER_MINUTE, 0, 60
         ),
     )
 

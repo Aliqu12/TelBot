@@ -93,6 +93,16 @@ class Assistant:
         )
         return answer
 
+    async def announce(self, instruction: str) -> str:
+        """Lässt das Modell eine kurze, eigenständige Nachricht schreiben (z. B. Start-/Stoppmeldung).
+
+        Mit Systemprompt und aktuellem Datum, aber ohne Verlauf und ohne Werkzeuge. Es wird nichts gespeichert.
+        """
+        system_prompt = f"{self._system_prompt}\n{self._date_context()}"
+        return await self._chat_model.complete(
+            [ChatMessage(role="system", content=system_prompt), ChatMessage(role="user", content=instruction)]
+        )
+
     async def _reply_with_tools(self, chat_id: int, messages: list[ChatMessage], model: ChatModel) -> str:
         assert self._tools is not None
         specs = self._tools.specs()
