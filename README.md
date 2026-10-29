@@ -11,9 +11,9 @@ Funktionen (MVP):
 - Persistenter, begrenzter Gesprächsverlauf pro Chat
 - Befehle `/start`, `/help`, `/reset`, `/whoami`
 - Nur private Chats, nur ein freigegebener Telegram-Nutzer
-- Statusmeldungen: Beim Start schickt der Assistent dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (in der Persönlichkeit aus `personality.md`, also bei Firzana mit "Assalam Alaykum" und "Khuda Hafiz"/"Allah Hafiz"; Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
-- Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in der Persönlichkeit aus `personality.md`, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
-- Austauschbare Persönlichkeit: Name, Biografie, Sprache, Begrüßung und Abschied stehen in einer Textdatei (`personality.md`, Standard: Firzana), die allgemeinen Regeln im Code (siehe [Persönlichkeit](#persönlichkeit-personalitymd))
+- Statusmeldungen: Beim Start schickt der Assistent dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (in der Persönlichkeit aus `PERSONALITY_FILE`, bei Firzana mit "Assalam Alaykum" und "Khuda Hafiz"/"Allah Hafiz"; Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
+- Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in der Persönlichkeit aus `PERSONALITY_FILE`, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
+- Austauschbare Persönlichkeit: Name, Biografie, Sprache, Begrüßung und Abschied stehen in einer Textdatei (`personality.md` neutral als Standard, `personalities/firzana.md` mitgeliefert), die allgemeinen Regeln im Code (siehe [Persönlichkeit](#persönlichkeit-personalitymd))
 - Optional: E-Mail-Integration (Yahoo Mail) – lesen, suchen, Entwürfe und Antworten;
   Versand nur nach Bestätigung per Schaltfläche (siehe [E-Mail-Integration](#e-mail-integration-yahoo))
 - Optional: Aufgaben-Integration (Todoist) – Aufgaben per Nachricht anlegen, anzeigen, ändern,
@@ -80,7 +80,8 @@ Funktionen (MVP):
 │       ├── access.py         Zugriffskontrolle (AccessPolicy)
 │       └── message_split.py  Lange Antworten aufteilen
 ├── tests/                    pytest, ohne echte Zugangsdaten
-├── personality.md            Persönlichkeit des Assistenten (Standard: Firzana)
+├── personality.md            Neutrale Standard-Persönlichkeit
+├── personalities/            Fertige Persönlichkeiten (firzana.md), Auswahl über PERSONALITY_FILE
 ├── Dockerfile
 ├── compose.yaml
 ├── .env.example
@@ -365,7 +366,9 @@ Die Persönlichkeit anpassen: siehe [Persönlichkeit](#persönlichkeit-personali
 
 Der Systemprompt besteht aus zwei Teilen:
 
-1. **Persönlichkeit** aus einer Textdatei (Standard `personality.md` im Projektordner, Firzana): Name,
+1. **Persönlichkeit** aus einer Textdatei: Standard ist die neutrale `personality.md` im Projektordner. Fertige
+   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`) und werden mit `PERSONALITY_FILE`
+   ausgewählt, z. B. `PERSONALITY_FILE=personalities/firzana.md`. Die Datei enthält Name,
    Biografie, Charakter, Sprache und Anrede, Begrüßung, Abschied, Schreibstil und Tonfall bei Fehlern.
 2. **Allgemeine Regeln** in `assistant_bot/prompts.py`: Aufgaben, Ehrlichkeit, Freigaben, Datenschutz sowie die
    Hinweise zu E-Mail, Aufgaben und Bildern. Sie gelten für jede Persönlichkeit.
@@ -380,26 +383,25 @@ der Datei.
 
 ### Zweiter Bot mit anderer Persönlichkeit
 
-Ein zweiter Container braucht einen eigenen Bot-Token (@BotFather), ein eigenes Volume (Datenbank), einen
-eigenen Compose-Projektnamen bzw. Containernamen und eine eigene Persönlichkeitsdatei:
+Ein zweiter Container braucht einen eigenen Bot-Token (@BotFather), ein eigenes Volume (Datenbank) und einen
+eigenen Compose-Projekt- und Containernamen. `Dockerfile` und Code bleiben gleich. Die Persönlichkeit
+wählt `PERSONALITY_FILE`; der Ordner `personalities/` ist in den Container eingebunden.
 
-```yaml
-# compose.layla.yaml (Beispiel; auf Basis von compose.yaml, Ausschnitt)
-name: telegram-assistant-layla
-services:
-  bot:
-    container_name: telegram-assistant-layla
-    environment:
-      PERSONALITY_FILE: /config/personality.md
-    volumes:
-      - assistant-data:/data
-      - ./personalities/layla.md:/config/personality.md:ro
-volumes:
-  assistant-data:
+1. Persönlichkeit anlegen, z. B. `personalities/layla.md` (am einfachsten als Kopie von `personalities/firzana.md`
+   oder `personality.md`, dann anpassen).
+2. `compose.yaml` kopieren (z. B. nach `compose.layla.yaml`) und `name:` sowie `container_name:` ändern,
+   z. B. auf `telegram-assistant-layla`. Der Projektname bestimmt auch den Volume-Namen; bei gleichem Namen
+   würden sich beide Bots die Datenbank teilen.
+3. Eigene Env-Datei `.env.layla` mit neuem `TELEGRAM_BOT_TOKEN` und `PERSONALITY_FILE=personalities/layla.md`.
+   `OPENROUTER_API_KEY` und `LLM_MODEL` dürfen gleich bleiben. Die Datei enthält Geheimnisse und darf nicht
+   ins Repository.
+4. Starten:
+
+```powershell
+docker compose -f compose.layla.yaml --env-file .env.layla up -d --build
 ```
 
-Die Datei `personalities/layla.md` entsteht am einfachsten als Kopie von `personality.md`, die dann angepasst
-wird. Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eigenen `.env`.
+Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eigenen `.env`.
 
 ## Docker-Konfiguration erklärt
 
@@ -438,7 +440,7 @@ wird. Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in ein
 
 ## Erweitern
 
-- **Persönlichkeit:** `personality.md` (bzw. die Datei aus `PERSONALITY_FILE`); allgemeine Regeln in `assistant_bot/prompts.py`.
+- **Persönlichkeit:** `personality.md` bzw. `personalities/*.md` (Auswahl über `PERSONALITY_FILE`); allgemeine Regeln in `assistant_bot/prompts.py`.
 - **Neue Befehle:** Methode in `BotHandlers` ergänzen, in `application.py` registrieren und
   in `BOT_COMMANDS` aufnehmen.
 - **Weitere Funktionen (Erinnerungen, Notizen, Tools, Homeserver-Integration):** in eigenen

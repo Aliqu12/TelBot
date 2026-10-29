@@ -28,8 +28,15 @@ def test_personality_file_can_be_configured(valid_env: dict[str, str]) -> None:
     assert settings.personality_file == Path("/config/arabisch.md")
 
 
-def test_shipped_personality_is_firzana_with_greeting_and_farewell() -> None:
+def test_default_personality_is_neutral() -> None:
     personality = load_personality(PROJECT_ROOT / DEFAULT_PERSONALITY_FILE)
+
+    assert "{owner_name}" in personality and "BEGRÜSSUNG UND ABSCHIED" in personality
+    assert not any(word in personality for word in ("Firzana", "Assalam", "Hafiz", "Urdu", "Islamabad"))
+
+
+def test_shipped_firzana_personality_has_greeting_and_farewell() -> None:
+    personality = load_personality(PROJECT_ROOT / "personalities" / "firzana.md")
 
     assert "Firzana" in personality and "{owner_name}" in personality
     assert "Assalam Alaykum" in personality and "Khuda Hafiz" in personality and "Allah Hafiz" in personality
