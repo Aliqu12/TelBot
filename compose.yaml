@@ -24,6 +24,9 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       ALLOWED_TELEGRAM_USER_ID: ${ALLOWED_TELEGRAM_USER_ID:-}
       OWNER_NAME: ${OWNER_NAME:-Ali}
+      # Persönlichkeit des Assistenten (Textdatei). Standard: personality.md aus dem Image (Firzana).
+      # Für eine andere Persönlichkeit: Datei per Volume einbinden und hier den Pfad im Container angeben.
+      PERSONALITY_FILE: ${PERSONALITY_FILE:-personality.md}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}

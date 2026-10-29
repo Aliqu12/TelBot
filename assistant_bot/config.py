@@ -14,6 +14,9 @@ from .mail.models import EmailValidationError, normalize_email_address
 DEFAULT_LLM_PROVIDER = "openrouter"
 DEFAULT_DATABASE_PATH = "data/assistant.db"
 DEFAULT_TIMEZONE = "Europe/Berlin"
+# Textdatei mit der Persönlichkeit des Assistenten (relativ zum Arbeitsverzeichnis, im Container /app).
+DEFAULT_PERSONALITY_FILE = "personality.md"
+MAX_PERSONALITY_CHARS = 20000
 # Bilder kosten viele Tokens; bei Bildanfragen wird deshalb weniger Verlauf mitgesendet.
 DEFAULT_IMAGE_HISTORY_MESSAGES = 4
 # Größte erlaubte Bilddatei in MB (Telegram liefert Dateien für Bots nur bis 20 MB aus).
@@ -92,6 +95,7 @@ class Settings:
     image_history_max_messages: int = DEFAULT_IMAGE_HISTORY_MESSAGES  # Verlauf bei Bildanfragen
     status_messages_enabled: bool = True  # Begrüßung beim Start und Abschied beim Beenden
     status_llm_max_per_minute: int = DEFAULT_STATUS_LLM_MAX_PER_MINUTE  # 0 = immer feste Texte
+    personality_file: Path = Path(DEFAULT_PERSONALITY_FILE)  # Persönlichkeit des Assistenten (Textdatei)
 
     @property
     def image_max_bytes(self) -> int:
@@ -246,12 +250,40 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         status_llm_max_per_minute=reader.integer(
             "STATUS_LLM_MAX_PER_MINUTE", DEFAULT_STATUS_LLM_MAX_PER_MINUTE, 0, 60
         ),
+        personality_file=Path(reader.text("PERSONALITY_FILE", DEFAULT_PERSONALITY_FILE)),
     )
 
     if reader.errors:
         details = "\n".join(f"  - {error}" for error in reader.errors)
         raise ConfigError(f"Ungültige Konfiguration:\n{details}")
     return settings
+
+
+def load_personality(path: Path) -> str:
+    """Liest die Persönlichkeitsdatei (UTF-8).
+
+    Raises:
+        ConfigError: Wenn die Datei fehlt, nicht lesbar, leer oder unsinnig groß ist.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig").strip()
+    except FileNotFoundError:
+        raise ConfigError(
+            f"PERSONALITY_FILE {str(path)!r} wurde nicht gefunden. Die Datei mit der Persönlichkeit des "
+            "Assistenten ist Pflicht (Standard: personality.md)."
+        ) from None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(
+            f"PERSONALITY_FILE {str(path)!r} konnte nicht gelesen werden ({type(exc).__name__}); "
+            "erwartet wird eine UTF-8-Textdatei."
+        ) from None
+    if not text:
+        raise ConfigError(f"PERSONALITY_FILE {str(path)!r} ist leer.")
+    if len(text) > MAX_PERSONALITY_CHARS:
+        raise ConfigError(
+            f"PERSONALITY_FILE {str(path)!r} ist zu lang ({len(text)} Zeichen, höchstens {MAX_PERSONALITY_CHARS})."
+        )
+    return text
 
 
 def _load_email_settings(reader: _EnvReader, owner_name: str) -> EmailSettings | None:

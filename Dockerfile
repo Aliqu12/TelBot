@@ -21,6 +21,8 @@ RUN groupadd --system --gid 10001 assistant \
     && chown assistant:assistant /data
 
 COPY assistant_bot/ ./assistant_bot/
+# Standard-Persönlichkeit (Firzana). Per Volume-Mount und PERSONALITY_FILE lässt sie sich ersetzen.
+COPY personality.md ./personality.md
 
 ENV DATABASE_PATH=/data/assistant.db
 
