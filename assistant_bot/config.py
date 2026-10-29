@@ -14,10 +14,19 @@ from .mail.models import EmailValidationError, normalize_email_address
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_DATABASE_PATH = "data/assistant.db"
 DEFAULT_TIMEZONE = "Europe/Berlin"
+# Bilder kosten viele Tokens; bei Bildanfragen wird deshalb weniger Verlauf mitgesendet.
+DEFAULT_IMAGE_HISTORY_MESSAGES = 4
+# Wie oft Start-/Stoppmeldungen pro Minute das Sprachmodell nutzen dürfen; danach gibt es nur feste Texte.
+DEFAULT_STATUS_LLM_MAX_PER_MINUTE = 2
+_TRUE_VALUES = ("true", "1", "yes", "ja", "on")
+_FALSE_VALUES = ("false", "0", "no", "nein", "off")
 # Muss zu den Providern in ``mail.factory`` passen.
 SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
 # Muss zu den Providern in ``tasks.factory`` passen.
 SUPPORTED_TASK_PROVIDERS = ("todoist",)
+
+# Werte für Groqs ``reasoning_effort`` bei Bildanfragen ("none" = Instruct-Modus ohne Denkphase).
+IMAGE_REASONING_EFFORTS = ("none", "default", "low", "medium", "high")
 
 _TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{30,}$")
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -72,6 +81,11 @@ class Settings:
     email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
     tasks: TaskSettings | None = None  # None = Aufgaben-Integration deaktiviert
     timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
+    groq_image_model: str | None = None  # None = Bildverarbeitung deaktiviert
+    groq_image_reasoning_effort: str | None = None  # None = Parameter wird nicht gesendet
+    image_history_max_messages: int = DEFAULT_IMAGE_HISTORY_MESSAGES  # Verlauf bei Bildanfragen
+    status_messages_enabled: bool = True  # Begrüßung beim Start und Abschied beim Beenden
+    status_llm_max_per_minute: int = DEFAULT_STATUS_LLM_MAX_PER_MINUTE  # 0 = immer feste Texte
 
     @property
     def secrets(self) -> tuple[str, ...]:
@@ -104,6 +118,17 @@ class _EnvReader:
 
     def text(self, name: str, default: str) -> str:
         return self.raw(name) or default
+
+    def boolean(self, name: str, default: bool) -> bool:
+        raw = self.raw(name).lower()
+        if not raw:
+            return default
+        if raw in _TRUE_VALUES:
+            return True
+        if raw in _FALSE_VALUES:
+            return False
+        self.errors.append(f"{name} muss true oder false sein (erhalten: {raw!r}).")
+        return default
 
     def integer(self, name: str, default: int, minimum: int, maximum: int) -> int:
         raw = self.raw(name)
@@ -170,6 +195,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if len(owner_name) > 100:
         reader.errors.append("OWNER_NAME darf höchstens 100 Zeichen lang sein.")
 
+    image_model, image_reasoning_effort = _load_image_model(reader)
+
     settings = Settings(
         telegram_bot_token=telegram_bot_token,
         groq_api_key=groq_api_key,
@@ -187,6 +214,15 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         email=_load_email_settings(reader, owner_name),
         tasks=_load_task_settings(reader),
         timezone=_load_timezone(reader),
+        groq_image_model=image_model,
+        groq_image_reasoning_effort=image_reasoning_effort,
+        image_history_max_messages=reader.integer(
+            "IMAGE_HISTORY_MAX_MESSAGES", DEFAULT_IMAGE_HISTORY_MESSAGES, 0, 200
+        ),
+        status_messages_enabled=reader.boolean("STATUS_MESSAGES_ENABLED", True),
+        status_llm_max_per_minute=reader.integer(
+            "STATUS_LLM_MAX_PER_MINUTE", DEFAULT_STATUS_LLM_MAX_PER_MINUTE, 0, 60
+        ),
     )
 
     if reader.errors:
@@ -232,6 +268,22 @@ def _load_email_settings(reader: _EnvReader, owner_name: str) -> EmailSettings |
         timeout_seconds=reader.number("EMAIL_TIMEOUT_SECONDS", 30.0, 5.0, 300.0),
         max_body_chars=reader.integer("EMAIL_MAX_BODY_CHARS", 6000, 500, 50000),
     )
+
+
+def _load_image_model(reader: _EnvReader) -> tuple[str | None, str | None]:
+    model = reader.raw("GROQ_IMAGE_MODEL") or None
+    effort = reader.raw("GROQ_IMAGE_REASONING_EFFORT").lower() or None
+    if effort is not None and effort not in IMAGE_REASONING_EFFORTS:
+        reader.errors.append(
+            f"GROQ_IMAGE_REASONING_EFFORT muss einer der Werte {', '.join(IMAGE_REASONING_EFFORTS)} sein "
+            "(oder leer)."
+        )
+    if model is None:
+        return None, None
+    if effort is None and model.lower().startswith("qwen/"):
+        # Qwen denkt sonst vor jeder Antwort ausführlich nach (langsamer, teurer, kann die Antwort abschneiden).
+        effort = "none"
+    return model, effort
 
 
 def _load_timezone(reader: _EnvReader) -> str:

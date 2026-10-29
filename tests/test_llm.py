@@ -16,6 +16,7 @@ from assistant_bot.llm import (
     LLMEmptyResponseError,
     LLMError,
     LLMRateLimitError,
+    LLMRequestTooLargeError,
     LLMTimeoutError,
     LLMUnavailableError,
 )
@@ -62,6 +63,7 @@ def test_successful_completion_returns_stripped_text_and_sends_messages() -> Non
     ("error", "expected"),
     [
         (status_error(groq.RateLimitError, 429), LLMRateLimitError),
+        (status_error(groq.APIStatusError, 413), LLMRequestTooLargeError),
         (groq.APITimeoutError(request=_REQUEST), LLMTimeoutError),
         (groq.APIConnectionError(message="down", request=_REQUEST), LLMUnavailableError),
         (status_error(groq.InternalServerError, 503), LLMUnavailableError),

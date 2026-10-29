@@ -7,7 +7,8 @@ Alle SDK-spezifischen Fehler werden hier in eigene, schmale Fehlerklassen
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Denkphase mancher Modelle (z. B. Qwen), falls sie im Antworttext mitgeliefert wird.
+_REASONING_BLOCK = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL)
+
 
 class LLMError(Exception):
     """Basisklasse für Fehler bei der Anfrage an das Sprachmodell."""
@@ -28,6 +32,10 @@ class LLMError(Exception):
 
 class LLMRateLimitError(LLMError):
     """Das Anfragelimit (HTTP 429) ist erreicht."""
+
+
+class LLMRequestTooLargeError(LLMError):
+    """Die Anfrage ist zu groß (HTTP 413), z. B. wegen des Token-Limits pro Minute."""
 
 
 class LLMTimeoutError(LLMError):
@@ -76,15 +84,17 @@ class GroqChatModel:
         model: str,
         temperature: float,
         max_completion_tokens: int,
+        extra_params: Mapping[str, Any] | None = None,
     ) -> None:
         self._client = client
         self._model = model
         self._temperature = temperature
         self._max_completion_tokens = max_completion_tokens
+        self._extra_params = dict(extra_params or {})
 
     async def complete(self, messages: Sequence[ChatMessage]) -> str:
         choice = await self._request(messages)
-        content = (choice.message.content or "").strip()
+        content = _answer_text(choice.message.content)
         if not content:
             logger.warning("Leere Antwort vom Modell (finish_reason=%s).", choice.finish_reason)
             raise LLMEmptyResponseError()
@@ -104,7 +114,7 @@ class GroqChatModel:
             ToolCall(call_id=call.id, name=call.function.name, arguments=call.function.arguments or "{}")
             for call in (choice.message.tool_calls or [])
         )
-        content = (choice.message.content or "").strip()
+        content = _answer_text(choice.message.content)
         if not content and not tool_calls:
             logger.warning("Leere Antwort vom Modell (finish_reason=%s).", choice.finish_reason)
             raise LLMEmptyResponseError()
@@ -117,6 +127,7 @@ class GroqChatModel:
                 messages=[message.to_api_dict() for message in messages],  # type: ignore[misc]
                 temperature=self._temperature,
                 max_completion_tokens=self._max_completion_tokens,
+                **self._extra_params,
                 **extra,
             )
         # Reihenfolge beachten: speziellere Klassen vor ihren Basisklassen.
@@ -133,9 +144,15 @@ class GroqChatModel:
             logger.error("Groq hat die Anfrage abgelehnt (HTTP %s). GROQ_API_KEY prüfen.", exc.status_code)
             raise LLMConfigurationError() from exc
         except groq.NotFoundError as exc:
-            logger.error("Groq-Modell %r nicht gefunden (HTTP 404). GROQ_MODEL prüfen.", self._model)
+            logger.error("Groq-Modell %r nicht gefunden (HTTP 404). Modellnamen in .env prüfen.", self._model)
             raise LLMConfigurationError() from exc
         except groq.APIStatusError as exc:
+            if exc.status_code == 413:
+                # Die Groq-Meldung nennt Limit und angefragte Tokens, enthält aber keine Nutzerdaten.
+                logger.warning(
+                    "Groq-Anfrage zu groß (HTTP 413, Modell %s): %s", self._model, _error_detail(exc)
+                )
+                raise LLMRequestTooLargeError() from exc
             if exc.status_code >= 500:
                 logger.warning("Groq-Serverfehler (HTTP %s).", exc.status_code)
                 raise LLMUnavailableError() from exc
@@ -154,12 +171,35 @@ class GroqChatModel:
         await self._client.close()
 
 
+def _error_detail(exc: groq.APIStatusError) -> str:
+    """Kurze Fehlerbeschreibung der API für das Log (Länge begrenzt)."""
+    return " ".join(str(exc.message).split())[:300]
+
+
+def _answer_text(content: str | None) -> str:
+    return _REASONING_BLOCK.sub("", content or "").strip()
+
+
 def create_groq_chat_model(settings: Settings) -> GroqChatModel:
     """Erzeugt das Groq-Modell inklusive Timeout und automatischer Wiederholungen.
 
     Das SDK wiederholt Verbindungsfehler, 408/409/429 und 5xx-Antworten selbst
     mit exponentiellem Backoff (``max_retries``).
     """
+    return _create_model(settings, settings.groq_model)
+
+
+def create_groq_image_model(settings: Settings) -> GroqChatModel | None:
+    """Erzeugt das Vision-Modell für Bildnachrichten (``None``, wenn GROQ_IMAGE_MODEL leer ist)."""
+    if settings.groq_image_model is None:
+        return None
+    extra: dict[str, Any] = {}
+    if settings.groq_image_reasoning_effort is not None:
+        extra["reasoning_effort"] = settings.groq_image_reasoning_effort
+    return _create_model(settings, settings.groq_image_model, extra)
+
+
+def _create_model(settings: Settings, model: str, extra_params: Mapping[str, Any] | None = None) -> GroqChatModel:
     client = AsyncGroq(
         api_key=settings.groq_api_key,
         timeout=settings.groq_timeout_seconds,
@@ -167,7 +207,8 @@ def create_groq_chat_model(settings: Settings) -> GroqChatModel:
     )
     return GroqChatModel(
         client,
-        model=settings.groq_model,
+        model=model,
         temperature=settings.groq_temperature,
         max_completion_tokens=settings.groq_max_completion_tokens,
+        extra_params=extra_params,
     )

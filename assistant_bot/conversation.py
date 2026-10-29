@@ -47,9 +47,15 @@ class ConversationService:
             connection.executescript(_SCHEMA)
         logger.info("Gesprächsdatenbank bereit: %s", self._database_path)
 
-    async def get_history(self, chat_id: int) -> list[ChatMessage]:
-        """Liefert die letzten ``max_history_messages`` Nachrichten in chronologischer Reihenfolge."""
-        return await asyncio.to_thread(self._get_history, chat_id)
+    async def get_history(self, chat_id: int, limit: int | None = None) -> list[ChatMessage]:
+        """Liefert die letzten Nachrichten in chronologischer Reihenfolge.
+
+        ``limit`` verkleinert den Kontext (0 = keiner), überschreitet aber nie ``max_history_messages``.
+        """
+        count = self._max_history_messages if limit is None else max(0, min(limit, self._max_history_messages))
+        if count == 0:
+            return []
+        return await asyncio.to_thread(self._get_history, chat_id, count)
 
     async def add_exchange(self, chat_id: int, user_text: str, assistant_text: str) -> None:
         """Speichert Frage und Antwort atomar in einer Transaktion."""
@@ -59,7 +65,7 @@ class ConversationService:
         """Löscht den Gesprächsverlauf eines Chats und gibt die Anzahl gelöschter Nachrichten zurück."""
         return await asyncio.to_thread(self._reset, chat_id)
 
-    def _get_history(self, chat_id: int) -> list[ChatMessage]:
+    def _get_history(self, chat_id: int, count: int) -> list[ChatMessage]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -70,7 +76,7 @@ class ConversationService:
                     LIMIT ?
                 ) ORDER BY id ASC
                 """,
-                (chat_id, self._max_history_messages),
+                (chat_id, count),
             ).fetchall()
         history = [ChatMessage(role=cast(Role, role), content=content) for role, content in rows]
         # Durch das Abschneiden kann der Kontext mit einer Antwort beginnen –
