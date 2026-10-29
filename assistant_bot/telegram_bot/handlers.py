@@ -17,6 +17,7 @@ from telegram.error import NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
 from ..assistant import Assistant
+from ..images import MAX_IMAGE_BYTES, ImageRejectedError, load_image, too_large_message
 from ..llm import (
     LLMConfigurationError,
     LLMEmptyResponseError,
@@ -55,6 +56,19 @@ _LLM_ERROR_MESSAGES: dict[type[LLMError], str] = {
     ),
     LLMEmptyResponseError: "Ich habe leider keine Antwort erhalten. Formuliere die Frage gern etwas anders.",
 }
+
+# Wird verwendet, wenn ein Bild ohne Bildunterschrift kommt.
+DEFAULT_IMAGE_PROMPT = (
+    "Was ist auf diesem Bild zu sehen? Falls es Text enthält, gib den Text vollständig und wortgetreu wieder."
+)
+IMAGES_DISABLED_MESSAGE = (
+    "Bilder kann ich noch nicht verarbeiten. Dazu muss GROQ_IMAGE_MODEL in der Konfiguration gesetzt sein."
+)
+_IMAGE_DOWNLOAD_ERROR = "Ich konnte das Bild nicht von Telegram laden. Bitte schick es noch einmal."
+_IMAGE_LLM_ERROR = (
+    "Das Bild konnte nicht verarbeitet werden. Versuch es bitte mit einem anderen Foto oder schick es "
+    "als normales Foto statt als Datei."
+)
 
 
 class BotHandlers:
@@ -100,7 +114,12 @@ class BotHandlers:
                 "- Ich verwalte deine Todoist-Aufgaben: anlegen (auch \"erinnere mich ...\"), anzeigen, "
                 'verschieben und erledigen. Gelöscht wird erst, wenn du auf "Löschen" tippst.\n'
             )
-        access_line += "- Ich habe keinen Zugriff auf das Internet oder auf Dateien.\n\n"
+        if self._assistant.supports_images:
+            access_line += (
+                "- Schick mir ein Foto (gern mit einer Frage als Bildunterschrift), dann lese ich den Text "
+                "daraus oder beschreibe, was zu sehen ist.\n"
+            )
+        access_line += "- Ich habe keinen Zugriff auf das Internet oder auf deine Dateien.\n\n"
         await _reply(
             message,
             "So funktioniere ich:\n"
@@ -160,18 +179,73 @@ class BotHandlers:
             except LLMError as exc:
                 answer = _LLM_ERROR_MESSAGES.get(type(exc), _GENERIC_ERROR_MESSAGE)
         await _reply(message, answer)
+        await self._present_confirmations(context.bot, chat.id)
+
+    async def image_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Foto oder Bilddatei: wird mit der Bildunterschrift an das Vision-Modell gegeben."""
+        message, user, chat = update.effective_message, update.effective_user, update.effective_chat
+        if message is None or user is None or chat is None:
+            return
+        # Zugriffsprüfung VOR dem Herunterladen und jeder LLM-Anfrage.
+        if not await self._authorize(user.id, message, "Bild"):
+            return
+        if not self._assistant.supports_images:
+            await _reply(message, IMAGES_DISABLED_MESSAGE)
+            return
+
+        caption = (message.caption or "").strip()
+        if len(caption) > self._max_input_chars:
+            await _reply(
+                message,
+                f"Die Bildunterschrift ist mit {len(caption)} Zeichen zu lang. "
+                f"Bitte kürze sie auf höchstens {self._max_input_chars} Zeichen.",
+            )
+            return
+        # Bei Fotos liefert Telegram mehrere Größen; die letzte ist die größte.
+        attachment = message.photo[-1] if message.photo else message.document
+        if attachment is None:
+            return
+        if attachment.file_size and attachment.file_size > MAX_IMAGE_BYTES:
+            await _reply(message, too_large_message(attachment.file_size))
+            return
+
+        async with _typing_indicator(context.bot, chat.id):
+            try:
+                telegram_file = await attachment.get_file()
+                data = bytes(await telegram_file.download_as_bytearray())
+            except TelegramError as exc:
+                logger.warning("Bild konnte nicht von Telegram geladen werden: %s", type(exc).__name__)
+                await _reply(message, _IMAGE_DOWNLOAD_ERROR)
+                return
+            try:
+                image = load_image(data)
+            except ImageRejectedError as exc:
+                logger.info("Bild abgelehnt (%d Bytes): %s", len(data), exc)
+                await _reply(message, str(exc))
+                return
+            try:
+                answer = await self._assistant.reply(chat.id, caption or DEFAULT_IMAGE_PROMPT, image=image)
+            except LLMError as exc:
+                answer = _LLM_ERROR_MESSAGES.get(type(exc), _IMAGE_LLM_ERROR)
+        await _reply(message, answer)
+        await self._present_confirmations(context.bot, chat.id)
+
+    async def _present_confirmations(self, bot: Bot, chat_id: int) -> None:
         if self._email_confirmation is not None:
             # Vom Modell erstellte/geänderte Entwürfe mit Freigabe-Schaltflächen anzeigen.
-            await self._email_confirmation.present_pending_draft(context.bot, chat.id)
+            await self._email_confirmation.present_pending_draft(bot, chat_id)
         if self._task_confirmation is not None:
             # Vom Modell vorbereitete Löschungen mit Bestätigungs-Schaltflächen anzeigen.
-            await self._task_confirmation.present_pending_deletion(context.bot, chat.id)
+            await self._task_confirmation.present_pending_deletion(bot, chat_id)
 
     async def unsupported_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user
         if message is None or user is None or not await self._authorize(user.id, message, "Nicht-Text"):
             return
-        await _reply(message, "Ich kann derzeit nur Textnachrichten verarbeiten.")
+        if self._assistant.supports_images:
+            await _reply(message, "Ich kann derzeit nur Text- und Bildnachrichten (Fotos) verarbeiten.")
+        else:
+            await _reply(message, "Ich kann derzeit nur Textnachrichten verarbeiten.")
 
     async def unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user

@@ -13,7 +13,7 @@ from datetime import datetime, tzinfo
 
 from .conversation import ConversationService
 from .llm import ChatModel
-from .messages import ChatMessage
+from .messages import ChatMessage, ImageInput
 from .tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 # Obergrenze für Modell-Runden mit Werkzeugaufrufen pro Nutzernachricht (Kosten-/Schleifenschutz).
 MAX_TOOL_ROUNDS = 5
 TOOL_LIMIT_MESSAGE = "Ich konnte die Anfrage nicht vollständig bearbeiten. Formuliere sie bitte etwas einfacher."
+# Platzhalter im gespeicherten Verlauf für Nachrichten mit Bild.
+IMAGE_HISTORY_PREFIX = "[Bild gesendet]"
 _WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 
 
@@ -33,20 +35,33 @@ class Assistant:
         tools: ToolRegistry | None = None,
         timezone: tzinfo | None = None,
         now: Callable[[], datetime] | None = None,
+        image_model: ChatModel | None = None,
     ) -> None:
         self._chat_model = chat_model
+        self._image_model = image_model
         self._conversations = conversations
         self._system_prompt = system_prompt
         self._tools = tools
         self._timezone = timezone
         self._now = now or (lambda: datetime.now(timezone))
 
-    async def reply(self, chat_id: int, user_text: str) -> str:
+    @property
+    def supports_images(self) -> bool:
+        return self._image_model is not None
+
+    async def reply(self, chat_id: int, user_text: str, image: ImageInput | None = None) -> str:
         """Erzeugt eine Antwort und speichert den Austausch erst nach Erfolg.
 
         Schlägt die LLM-Anfrage fehl, bleibt der Verlauf unverändert. So entstehen
         keine "verwaisten" Nutzernachrichten ohne Antwort im Kontext.
+
+        Mit ``image`` beantwortet das Vision-Modell die Nachricht. Das Bild selbst wird
+        nicht gespeichert, im Verlauf steht nur ein Platzhalter mit dem Text.
         """
+        if image is not None and self._image_model is None:
+            raise ValueError("Bildverarbeitung ist nicht aktiviert (GROQ_IMAGE_MODEL fehlt).")
+        model = self._chat_model if image is None else self._image_model
+        assert model is not None
         history = await self._conversations.get_history(chat_id)
         system_prompt = self._system_prompt
         if self._tools:
@@ -54,28 +69,30 @@ class Assistant:
         messages = [
             ChatMessage(role="system", content=system_prompt),
             *history,
-            ChatMessage(role="user", content=user_text),
+            ChatMessage(role="user", content=user_text, images=() if image is None else (image,)),
         ]
         if self._tools:
-            answer = await self._reply_with_tools(chat_id, messages)
+            answer = await self._reply_with_tools(chat_id, messages, model)
         else:
-            answer = await self._chat_model.complete(messages)
-        # Gespeichert werden nur Frage und Antwort – keine Werkzeugergebnisse (z. B. E-Mail-Inhalte).
-        await self._conversations.add_exchange(chat_id, user_text, answer)
+            answer = await model.complete(messages)
+        # Gespeichert werden nur Frage und Antwort – keine Werkzeugergebnisse (z. B. E-Mail-Inhalte) und keine Bilder.
+        stored_text = user_text if image is None else f"{IMAGE_HISTORY_PREFIX} {user_text}"
+        await self._conversations.add_exchange(chat_id, stored_text, answer)
         logger.info(
-            "Antwort erzeugt (chat_id=%s, Kontext=%d Nachrichten, Eingabe=%d Zeichen, Antwort=%d Zeichen).",
+            "Antwort erzeugt (chat_id=%s, Kontext=%d Nachrichten, Eingabe=%d Zeichen, Bild=%s, Antwort=%d Zeichen).",
             chat_id,
             len(history),
             len(user_text),
+            "nein" if image is None else f"{image.mime_type}/{len(image.data)} Bytes",
             len(answer),
         )
         return answer
 
-    async def _reply_with_tools(self, chat_id: int, messages: list[ChatMessage]) -> str:
+    async def _reply_with_tools(self, chat_id: int, messages: list[ChatMessage], model: ChatModel) -> str:
         assert self._tools is not None
         specs = self._tools.specs()
         for _ in range(MAX_TOOL_ROUNDS):
-            turn = await self._chat_model.complete_with_tools(messages, specs)
+            turn = await model.complete_with_tools(messages, specs)
             if not turn.tool_calls:
                 return turn.content
             messages.append(ChatMessage(role="assistant", content=turn.content, tool_calls=turn.tool_calls))
@@ -102,3 +119,5 @@ class Assistant:
 
     async def aclose(self) -> None:
         await self._chat_model.aclose()
+        if self._image_model is not None:
+            await self._image_model.aclose()

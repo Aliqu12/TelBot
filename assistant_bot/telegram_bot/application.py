@@ -88,6 +88,7 @@ def build_application(
     application.add_handler(CommandHandler("whoami", handlers.whoami_command, filters=base))
     application.add_handler(MessageHandler(base & filters.COMMAND, handlers.unknown_command))
     application.add_handler(MessageHandler(base & filters.TEXT, handlers.text_message))
+    application.add_handler(MessageHandler(base & (filters.PHOTO | filters.Document.IMAGE), handlers.image_message))
     application.add_handler(MessageHandler(base & ~filters.TEXT, handlers.unsupported_message))
     if email_confirmation is not None:
         application.add_handler(CallbackQueryHandler(email_confirmation.callback, pattern=CALLBACK_PATTERN))
