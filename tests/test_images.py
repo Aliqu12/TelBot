@@ -247,6 +247,8 @@ def make_handlers(*, images: bool = True, max_image_bytes: int = DEFAULT_MAX_IMA
     assistant = MagicMock()
     assistant.supports_images = images
     assistant.reply = AsyncMock(return_value="Bild-Antwort")
+    # Standardmäßig liefert das "Modell" den festen Ersatztext (wie bei einem Modellausfall).
+    assistant.explain_problem = AsyncMock(side_effect=lambda situation, fallback: fallback)
     handlers = BotHandlers(
         assistant=assistant,
         access=AccessPolicy(OWNER),

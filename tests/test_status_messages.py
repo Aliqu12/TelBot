@@ -15,7 +15,12 @@ from assistant_bot.assistant import Assistant
 from assistant_bot.config import load_settings
 from assistant_bot.conversation import ConversationService
 from assistant_bot.llm import LLMRateLimitError
-from assistant_bot.prompts import SHUTDOWN_INSTRUCTION, STARTUP_INSTRUCTION
+from assistant_bot.prompts import (
+    SHUTDOWN_INSTRUCTION,
+    START_COMMAND_INSTRUCTION,
+    STARTUP_INSTRUCTION,
+    build_system_prompt,
+)
 from assistant_bot.telegram_bot.application import (
     MAX_STATUS_CHARS,
     SHUTDOWN_FALLBACK,
@@ -117,6 +122,56 @@ def test_instructions_name_the_owner_and_describe_the_event() -> None:
 
     assert "Ali" in start and "startklar" in start
     assert "Ali" in stop and "kurz" in stop and "erfinde keine" in stop.lower()
+
+
+def test_greeting_demands_assalam_alaykum_and_farewell_khuda_or_allah_hafiz() -> None:
+    assert "Assalam Alaykum" in STARTUP_INSTRUCTION
+    assert "Assalam Alaykum" in START_COMMAND_INSTRUCTION
+    assert "Khuda Hafiz" in SHUTDOWN_INSTRUCTION and "Allah Hafiz" in SHUTDOWN_INSTRUCTION
+    assert STARTUP_FALLBACK.startswith("Assalam Alaykum") and "Hafiz" in SHUTDOWN_FALLBACK
+    prompt = build_system_prompt("Ali")
+    assert "Assalam Alaykum" in prompt and "Khuda Hafiz" in prompt and "keine KI" in prompt
+
+
+def make_real_assistant(tmp_path: Path, model: RecordingModel) -> Assistant:
+    conversations = ConversationService(tmp_path / "test.db", 20)
+    conversations.initialize()
+    return Assistant(model, conversations, "SYSTEM")  # type: ignore[arg-type]
+
+
+def test_explain_problem_returns_model_text_and_passes_situation(tmp_path: Path) -> None:
+    model = RecordingModel("  Sorry Chef, das Bild ist zu groß.  ")
+    assistant = make_real_assistant(tmp_path, model)
+
+    answer = asyncio.run(assistant.explain_problem("Das Bild ist 9 MB groß.", "Fester Text"))
+
+    assert answer == "Sorry Chef, das Bild ist zu groß."
+    instruction = model.calls[0][1].content
+    assert "Das Bild ist 9 MB groß." in instruction and "Keine Fehlercodes" in instruction
+
+
+class FailingModel(RecordingModel):
+    async def complete(self, messages: Any) -> str:
+        raise LLMRateLimitError()
+
+
+@pytest.mark.parametrize("answer", ["", "x" * 2000], ids=["empty", "too-long"])
+def test_explain_problem_uses_fallback_for_unusable_model_text(tmp_path: Path, answer: str) -> None:
+    assistant = make_real_assistant(tmp_path, RecordingModel(answer))
+
+    assert asyncio.run(assistant.explain_problem("Problem", "Fester Text")) == "Fester Text"
+
+
+def test_explain_problem_uses_fallback_on_model_error_and_timeout(tmp_path: Path) -> None:
+    assert asyncio.run(make_real_assistant(tmp_path, FailingModel("x")).explain_problem("P", "Fester Text")) == "Fester Text"
+
+    class SlowModel(RecordingModel):
+        async def complete(self, messages: Any) -> str:
+            await asyncio.sleep(5)
+            return "zu spät"
+
+    assistant = make_real_assistant(tmp_path, SlowModel("x"))
+    assert asyncio.run(assistant.write_notice("Anweisung", "Fester Text", timeout=0.05)) == "Fester Text"
 
 
 def test_application_hooks_send_model_generated_messages(valid_env: dict[str, str]) -> None:

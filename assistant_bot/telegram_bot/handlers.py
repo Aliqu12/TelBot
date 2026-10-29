@@ -28,6 +28,7 @@ from ..llm import (
     LLMTimeoutError,
     LLMUnavailableError,
 )
+from ..prompts import START_COMMAND_INSTRUCTION
 from .access import AccessPolicy
 from .email_confirmation import EmailConfirmationHandlers
 from .message_split import split_message
@@ -45,36 +46,84 @@ SETUP_HINT = (
     "3. Starte den Bot neu."
 )
 
-_GENERIC_ERROR_MESSAGE = "Da ist leider etwas schiefgelaufen. Bitte versuche es später noch einmal."
+# Fehler werden nicht als feste Texte ausgegeben: Das Modell formuliert sie in Firzanas Worten.
+# Jeder Eintrag besteht aus der sachlichen Beschreibung ("Situation") für das Modell und einem festen
+# Ersatztext, der nur gilt, wenn das Modell die Antwort nicht rechtzeitig liefern kann.
+_Problem = tuple[str, str]
 
-_LLM_ERROR_MESSAGES: dict[type[LLMError], str] = {
+_GENERIC_PROBLEM: _Problem = (
+    "Bei der Bearbeitung ist etwas Unerwartetes schiefgelaufen. Er soll es später noch einmal versuchen.",
+    "Sorry, da ist gerade etwas schiefgelaufen. Versuch es bitte gleich noch einmal.",
+)
+
+_LLM_PROBLEMS: dict[type[LLMError], _Problem] = {
     LLMRateLimitError: (
-        "Das Anfragelimit des Sprachmodells ist gerade erreicht. Bitte warte einen Moment und versuche es dann erneut."
+        "Du bist gerade überlastet: Es gab zu viele Anfragen in kurzer Zeit (Anfragelimit erreicht). "
+        "Er soll einen Moment warten und es dann noch einmal versuchen.",
+        "Sorry, ich komme gerade nicht hinterher, das Anfragelimit ist erreicht. Gib mir einen Moment "
+        "und versuch es dann noch einmal.",
     ),
     LLMRequestTooLargeError: (
-        "Die Anfrage ist für das Sprachmodell zu groß. Schick /reset, um den Verlauf zu löschen, "
-        "und versuche es dann noch einmal. Bei Bildern hilft auch ein kleineres Foto."
+        "Die Anfrage war zu umfangreich, um sie zu bearbeiten, oft wegen des langen Gesprächsverlaufs. "
+        "Mit dem Befehl /reset kann er den Verlauf löschen und neu beginnen. Bei Bildern hilft auch ein kleineres Foto.",
+        "Sorry, das war zu viel auf einmal. Schick /reset, um den Verlauf zu löschen, und versuch es dann "
+        "noch einmal. Bei Bildern hilft auch ein kleineres Foto.",
     ),
     LLMInsufficientCreditsError: (
-        "Das Guthaben beim Sprachmodell-Anbieter ist aufgebraucht. Es muss erst wieder aufgeladen werden."
+        "Das Guthaben für die Arbeit ist aufgebraucht, du kannst im Moment nicht antworten. "
+        "Es muss erst wieder aufgeladen werden.",
+        "Sorry, das Guthaben ist aufgebraucht, ich kann gerade nicht arbeiten. Es muss erst wieder aufgeladen werden.",
     ),
-    LLMTimeoutError: "Das Sprachmodell hat nicht rechtzeitig geantwortet. Bitte versuche es noch einmal.",
-    LLMUnavailableError: "Das Sprachmodell ist momentan nicht erreichbar. Bitte versuche es später erneut.",
+    LLMTimeoutError: (
+        "Du hast zu lange gebraucht und bist nicht rechtzeitig fertig geworden. Er soll es noch einmal versuchen.",
+        "Sorry, das hat zu lange gedauert. Versuch es bitte noch einmal.",
+    ),
+    LLMUnavailableError: (
+        "Du bist gerade nicht erreichbar bzw. kommst nicht an das, was du zum Antworten brauchst. "
+        "Er soll es später noch einmal versuchen.",
+        "Sorry, ich komme gerade nicht durch. Versuch es später bitte noch einmal.",
+    ),
     LLMConfigurationError: (
-        "Der Zugriff auf das Sprachmodell ist fehlgeschlagen. Bitte API-Key und Modellnamen in der Konfiguration prüfen."
+        "Du hast keinen Zugang mehr zu dem, was du zum Antworten brauchst (Zugangsdaten oder Einstellungen "
+        "sind falsch). Er muss die Konfiguration prüfen, du kannst das nicht selbst beheben.",
+        "Sorry, ich komme gerade nicht an meine Arbeitsmittel. Bitte API-Key und Modellnamen in der "
+        "Konfiguration prüfen.",
     ),
-    LLMEmptyResponseError: "Ich habe leider keine Antwort erhalten. Formuliere die Frage gern etwas anders.",
+    LLMEmptyResponseError: (
+        "Dir ist auf seine Nachricht keine Antwort eingefallen. Er soll die Frage gern etwas anders formulieren.",
+        "Dazu ist mir gerade nichts eingefallen. Formuliere die Frage gern etwas anders.",
+    ),
 }
 
 # Wird verwendet, wenn ein Bild ohne Bildunterschrift kommt.
 DEFAULT_IMAGE_PROMPT = (
     "Was ist auf diesem Bild zu sehen? Falls es Text enthält, gib den Text vollständig und wortgetreu wieder."
 )
-IMAGES_DISABLED_MESSAGE = "Bilder kann ich im Moment nicht verarbeiten."
-_IMAGE_DOWNLOAD_ERROR = "Ich konnte das Bild nicht von Telegram laden. Bitte schick es noch einmal."
-_IMAGE_LLM_ERROR = (
+_IMAGES_DISABLED_SITUATION = "Er hat dir ein Bild geschickt, aber Bilder kannst du im Moment nicht ansehen."
+IMAGES_DISABLED_MESSAGE = "Bilder kann ich im Moment leider nicht ansehen."
+_IMAGE_DOWNLOAD_PROBLEM: _Problem = (
+    "Das Bild ist bei dir nicht angekommen, es konnte nicht geladen werden. Er soll es noch einmal schicken.",
+    "Ich konnte das Bild nicht von Telegram laden. Bitte schick es noch einmal.",
+)
+_IMAGE_LLM_PROBLEM: _Problem = (
+    "Du konntest das Bild nicht auswerten. Er soll es mit einem anderen Foto versuchen oder es als normales "
+    "Foto statt als Datei schicken.",
     "Das Bild konnte nicht verarbeitet werden. Versuch es bitte mit einem anderen Foto oder schick es "
-    "als normales Foto statt als Datei."
+    "als normales Foto statt als Datei.",
+)
+_UNSUPPORTED_PROBLEM: _Problem = (
+    "Er hat dir etwas geschickt (z. B. Sprachnachricht, Sticker oder Datei), das du nicht verarbeiten kannst. "
+    "Du kannst nur Text lesen.",
+    "Ich kann derzeit nur Textnachrichten verarbeiten.",
+)
+_UNSUPPORTED_WITH_IMAGES_PROBLEM: _Problem = (
+    "Er hat dir etwas geschickt (z. B. Sprachnachricht, Sticker oder Datei), das du nicht verarbeiten kannst. "
+    "Du kannst nur Text und Fotos ansehen.",
+    "Ich kann derzeit nur Text- und Bildnachrichten (Fotos) verarbeiten.",
+)
+_UNKNOWN_COMMAND_PROBLEM: _Problem = (
+    "Er hat einen Befehl (/...) geschickt, den es nicht gibt. Mit /help bekommt er alle Befehle angezeigt.",
+    "Diesen Befehl kenne ich nicht. Mit /help siehst du alle Befehle.",
 )
 
 
@@ -102,11 +151,12 @@ class BotHandlers:
         message, user = update.effective_message, update.effective_user
         if message is None or user is None or not await self._authorize(user.id, message, "/start"):
             return
-        await _reply(
-            message,
-            f"Hallo {self._owner_name}! Ich bin dein persönlicher KI-Assistent.\n\n"
-            "Schreib mir einfach eine Nachricht. Mit /help siehst du, was ich kann.",
+        greeting = await self._assistant.write_notice(
+            START_COMMAND_INSTRUCTION.format(owner_name=self._owner_name),
+            f"Assalam Alaykum {self._owner_name}! Schreib mir einfach eine Nachricht. "
+            "Mit /help siehst du, was ich kann.",
         )
+        await _reply(message, greeting)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user
@@ -175,8 +225,10 @@ class BotHandlers:
         if not text:
             return
         if len(text) > self._max_input_chars:
-            await _reply(
+            await self._reply_problem(
                 message,
+                f"Seine Nachricht hat {len(text)} Zeichen, erlaubt sind höchstens {self._max_input_chars}. "
+                "Er soll sie bitte kürzen.",
                 f"Deine Nachricht ist mit {len(text)} Zeichen zu lang. "
                 f"Bitte kürze sie auf höchstens {self._max_input_chars} Zeichen.",
             )
@@ -186,7 +238,7 @@ class BotHandlers:
             try:
                 answer = await self._assistant.reply(chat.id, text)
             except LLMError as exc:
-                answer = _LLM_ERROR_MESSAGES.get(type(exc), _GENERIC_ERROR_MESSAGE)
+                answer = await self._llm_problem_text(exc, _GENERIC_PROBLEM)
         await _reply(message, answer)
         await self._present_confirmations(context.bot, chat.id)
 
@@ -199,13 +251,15 @@ class BotHandlers:
         if not await self._authorize(user.id, message, "Bild"):
             return
         if not self._assistant.supports_images:
-            await _reply(message, IMAGES_DISABLED_MESSAGE)
+            await self._reply_problem(message, _IMAGES_DISABLED_SITUATION, IMAGES_DISABLED_MESSAGE)
             return
 
         caption = (message.caption or "").strip()
         if len(caption) > self._max_input_chars:
-            await _reply(
+            await self._reply_problem(
                 message,
+                f"Die Bildunterschrift hat {len(caption)} Zeichen, erlaubt sind höchstens "
+                f"{self._max_input_chars}. Er soll sie bitte kürzen.",
                 f"Die Bildunterschrift ist mit {len(caption)} Zeichen zu lang. "
                 f"Bitte kürze sie auf höchstens {self._max_input_chars} Zeichen.",
             )
@@ -215,7 +269,8 @@ class BotHandlers:
         if attachment is None:
             return
         if attachment.file_size and attachment.file_size > self._max_image_bytes:
-            await _reply(message, too_large_message(attachment.file_size, self._max_image_bytes))
+            problem = too_large_message(attachment.file_size, self._max_image_bytes)
+            await self._reply_problem(message, f"Das Bild ist zu groß: {problem}", problem)
             return
 
         async with _typing_indicator(context.bot, chat.id):
@@ -224,18 +279,18 @@ class BotHandlers:
                 data = bytes(await telegram_file.download_as_bytearray())
             except TelegramError as exc:
                 logger.warning("Bild konnte nicht von Telegram geladen werden: %s", type(exc).__name__)
-                await _reply(message, _IMAGE_DOWNLOAD_ERROR)
+                await self._reply_problem(message, *_IMAGE_DOWNLOAD_PROBLEM)
                 return
             try:
                 image = load_image(data, self._max_image_bytes)
             except ImageRejectedError as exc:
                 logger.info("Bild abgelehnt (%d Bytes): %s", len(data), exc)
-                await _reply(message, str(exc))
+                await self._reply_problem(message, f"Das Bild kann nicht verarbeitet werden: {exc}", str(exc))
                 return
             try:
                 answer = await self._assistant.reply(chat.id, caption or DEFAULT_IMAGE_PROMPT, image=image)
             except LLMError as exc:
-                answer = _LLM_ERROR_MESSAGES.get(type(exc), _IMAGE_LLM_ERROR)
+                answer = await self._llm_problem_text(exc, _IMAGE_LLM_PROBLEM)
         await _reply(message, answer)
         await self._present_confirmations(context.bot, chat.id)
 
@@ -252,15 +307,15 @@ class BotHandlers:
         if message is None or user is None or not await self._authorize(user.id, message, "Nicht-Text"):
             return
         if self._assistant.supports_images:
-            await _reply(message, "Ich kann derzeit nur Text- und Bildnachrichten (Fotos) verarbeiten.")
+            await self._reply_problem(message, *_UNSUPPORTED_WITH_IMAGES_PROBLEM)
         else:
-            await _reply(message, "Ich kann derzeit nur Textnachrichten verarbeiten.")
+            await self._reply_problem(message, *_UNSUPPORTED_PROBLEM)
 
     async def unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user
         if message is None or user is None or not await self._authorize(user.id, message, "unbekannter Befehl"):
             return
-        await _reply(message, "Diesen Befehl kenne ich nicht. Mit /help siehst du alle Befehle.")
+        await self._reply_problem(message, *_UNKNOWN_COMMAND_PROBLEM)
 
     async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         error = context.error
@@ -277,7 +332,15 @@ class BotHandlers:
         if message is None or user is None or not self._access.is_authorized(user.id):
             return
         with contextlib.suppress(TelegramError):
-            await message.reply_text(_GENERIC_ERROR_MESSAGE)
+            await message.reply_text(await self._assistant.explain_problem(*_GENERIC_PROBLEM))
+
+    async def _reply_problem(self, message: Message, situation: str, fallback: str) -> None:
+        """Antwortet mit einer vom Modell formulierten Fehlererklärung (oder dem festen Ersatztext)."""
+        await _reply(message, await self._assistant.explain_problem(situation, fallback))
+
+    async def _llm_problem_text(self, error: LLMError, default: _Problem) -> str:
+        situation, fallback = _LLM_PROBLEMS.get(type(error), default)
+        return await self._assistant.explain_problem(situation, fallback)
 
     async def _authorize(self, user_id: int, message: Message, action: str) -> bool:
         if self._access.is_authorized(user_id):

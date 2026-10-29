@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 from assistant_bot.assistant import MAX_TOOL_ROUNDS, TOOL_LIMIT_MESSAGE, Assistant
 from assistant_bot.conversation import ConversationService
-from assistant_bot.llm import ModelTurn, OpenAICompatibleChatModel
+from assistant_bot.llm import LLMUnavailableError, ModelTurn, OpenAICompatibleChatModel
 from assistant_bot.mail.models import EmailCapability, EmailMessage
 from assistant_bot.mail.service import EmailService
 from assistant_bot.mail.tools import UNTRUSTED_END, build_email_tools
@@ -206,10 +206,23 @@ def test_tool_loop_executes_tools_and_stores_only_final_answer(tmp_path: Path) -
 def test_tool_loop_is_bounded(tmp_path: Path) -> None:
     registry, _, _ = email_registry()
     model = ScriptedModel([ModelTurn("", (call("list_emails"),))])
+    model.complete = AsyncMock(side_effect=LLMUnavailableError())  # type: ignore[method-assign]
     assistant, _ = make_assistant(tmp_path, model, registry)
 
+    # Kann das Modell den Hinweis nicht formulieren, gilt der feste Text.
     assert asyncio.run(assistant.reply(CHAT, "Endlos")) == TOOL_LIMIT_MESSAGE
     assert len(model.calls) == MAX_TOOL_ROUNDS
+
+
+def test_tool_loop_limit_message_is_written_by_the_model(tmp_path: Path) -> None:
+    registry, _, _ = email_registry()
+    model = ScriptedModel([ModelTurn("", (call("list_emails"),))])
+    model.complete = AsyncMock(return_value="Sorry, das war mir zu verzwickt.")  # type: ignore[method-assign]
+    assistant, _ = make_assistant(tmp_path, model, registry)
+
+    assert asyncio.run(assistant.reply(CHAT, "Endlos")) == "Sorry, das war mir zu verzwickt."
+    (instruction,) = model.complete.await_args.args[0][1:]
+    assert instruction.role == "user" and "nicht zum Ziel gekommen" in instruction.content
 
 
 def test_injected_send_request_cannot_send(tmp_path: Path) -> None:

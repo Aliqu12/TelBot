@@ -11,7 +11,8 @@ Funktionen (MVP):
 - Persistenter, begrenzter Gesprächsverlauf pro Chat
 - Befehle `/start`, `/help`, `/reset`, `/whoami`
 - Nur private Chats, nur ein freigegebener Telegram-Nutzer
-- Statusmeldungen: Beim Start schickt Firzana dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (im Stil des Systemprompts, Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
+- Statusmeldungen: Beim Start schickt Firzana dem freigegebenen Nutzer eine Begrüßung (immer mit "Assalam Alaykum"), beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung (mit "Khuda Hafiz" oder "Allah Hafiz"). Beide Texte formuliert das Sprachmodell jedes Mal neu (im Stil des Systemprompts, Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
+- Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in Firzanas Worten, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
 - Zentraler, anpassbarer Systemprompt
 - Optional: E-Mail-Integration (Yahoo Mail) – lesen, suchen, Entwürfe und Antworten;
   Versand nur nach Bestätigung per Schaltfläche (siehe [E-Mail-Integration](#e-mail-integration-yahoo))
@@ -113,7 +114,7 @@ Wichtige Entscheidungen:
   (`LLM_PROVIDER`, siehe `llm/factory.py`).
 - **Fehlerübersetzung im LLM-Service:** SDK-Fehler werden in eigene Klassen
   (`LLMRateLimitError`, `LLMInsufficientCreditsError`, `LLMTimeoutError`, ...) übersetzt.
-  Die Handler zeigen dazu verständliche deutsche Meldungen. Auch Fehler, die OpenRouter
+  Die Handler lassen das Sprachmodell dazu eine verständliche, menschliche Antwort schreiben (mit festem Ersatztext). Auch Fehler, die OpenRouter
   trotz HTTP 200 im Antworttext meldet, werden erkannt. Das SDK selbst wiederholt
   Netzwerkfehler, 429 und 5xx automatisch (`LLM_MAX_RETRIES`).
 - **Verlauf wird erst nach erfolgreicher Antwort gespeichert:** Schlägt eine Anfrage fehl,

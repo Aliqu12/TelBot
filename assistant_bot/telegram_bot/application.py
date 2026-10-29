@@ -39,8 +39,8 @@ BOT_COMMANDS = [
 ]
 
 # Feste Texte, falls das Sprachmodell nicht rechtzeitig antwortet (Limit, Netzwerk, Zeitlimit).
-STARTUP_FALLBACK = "Hallo {owner}, Firzana ist online und einsatzbereit."
-SHUTDOWN_FALLBACK = "Firzana ist kurz nicht erreichbar (Neustart oder Wartung). Ich melde mich, sobald ich wieder da bin."
+STARTUP_FALLBACK = "Assalam Alaykum {owner}! Ich bin da und startklar."
+SHUTDOWN_FALLBACK = "Ich bin kurz weg und melde mich, sobald ich wieder da bin. Khuda Hafiz!"
 # Beim Start darf die Begrüßung etwas dauern; beim Stoppen muss sie vor dem SIGKILL von Docker (Standard 10 s) fertig sein.
 STARTUP_TIMEOUT_SECONDS = 10.0
 SHUTDOWN_TIMEOUT_SECONDS = 5.0

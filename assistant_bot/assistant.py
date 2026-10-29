@@ -7,14 +7,16 @@ die Telegram- oder LLM-Anbindung zu verändern.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime, tzinfo
 
 from .config import DEFAULT_IMAGE_HISTORY_MESSAGES
 from .conversation import ConversationService
-from .llm import ChatModel
+from .llm import ChatModel, LLMError
 from .messages import ChatMessage, ImageInput
+from .prompts import ERROR_INSTRUCTION
 from .tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,13 @@ logger = logging.getLogger(__name__)
 # Obergrenze für Modell-Runden mit Werkzeugaufrufen pro Nutzernachricht (Kosten-/Schleifenschutz).
 MAX_TOOL_ROUNDS = 20
 TOOL_LIMIT_MESSAGE = "Ich konnte die Anfrage nicht vollständig bearbeiten. Formuliere sie bitte etwas einfacher."
+TOOL_LIMIT_SITUATION = (
+    "Die Anfrage war zu verwickelt, du bist beim Bearbeiten nicht zum Ziel gekommen und hast sie nicht "
+    "vollständig erledigt. Er soll sie bitte einfacher oder in kleineren Schritten formulieren."
+)
+# Kurze Nachrichten sollen schnell kommen; klappt die Formulierung durch das Modell nicht, gilt der feste Text.
+NOTICE_TIMEOUT_SECONDS = 10.0
+MAX_NOTICE_CHARS = 800
 # Platzhalter im gespeicherten Verlauf für Nachrichten mit Bild.
 IMAGE_HISTORY_PREFIX = "[Bild gesendet]"
 _WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
@@ -103,6 +112,27 @@ class Assistant:
             [ChatMessage(role="system", content=system_prompt), ChatMessage(role="user", content=instruction)]
         )
 
+    async def write_notice(self, instruction: str, fallback: str, timeout: float = NOTICE_TIMEOUT_SECONDS) -> str:
+        """Lässt das Modell eine kurze Nachricht in Firzanas Worten schreiben (Begrüßung, Fehlererklärung usw.).
+
+        Bei Modellfehler, Zeitüberschreitung oder unbrauchbarer Antwort wird der feste ``fallback``
+        zurückgegeben; diese Methode löst nie einen Modellfehler aus.
+        """
+        try:
+            text = await asyncio.wait_for(self.announce(instruction), timeout)
+        except (LLMError, TimeoutError) as exc:
+            logger.warning("Nachricht nicht vom Modell formuliert (%s), nutze festen Text.", type(exc).__name__)
+            return fallback
+        text = text.strip()
+        if not 0 < len(text) <= MAX_NOTICE_CHARS:
+            logger.warning("Nachricht des Modells unbrauchbar (%d Zeichen), nutze festen Text.", len(text))
+            return fallback
+        return text
+
+    async def explain_problem(self, situation: str, fallback: str) -> str:
+        """Lässt das Modell einen Fehler menschlich erklären; ``situation`` beschreibt sachlich, was schiefging."""
+        return await self.write_notice(ERROR_INSTRUCTION.format(situation=situation), fallback)
+
     async def _reply_with_tools(self, chat_id: int, messages: list[ChatMessage], model: ChatModel) -> str:
         assert self._tools is not None
         specs = self._tools.specs()
@@ -115,7 +145,7 @@ class Assistant:
                 result = await self._tools.execute(chat_id, call)
                 messages.append(ChatMessage(role="tool", content=result, tool_call_id=call.call_id))
         logger.warning("Maximale Anzahl an Werkzeugrunden erreicht (chat_id=%s).", chat_id)
-        return TOOL_LIMIT_MESSAGE
+        return await self.explain_problem(TOOL_LIMIT_SITUATION, TOOL_LIMIT_MESSAGE)
 
     def _date_context(self) -> str:
         """Datum, Wochentag und Uhrzeit, damit das Modell "morgen" oder "Freitag" korrekt berechnet."""
