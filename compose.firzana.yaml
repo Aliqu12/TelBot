@@ -16,7 +16,7 @@ name: firzana-khan-assistant
 services:
   bot:
     build: .
-    image: telegram-assistant:0.3.1
+    image: telegram-assistant:0.3.2
     container_name: firzana-khan-assistant
     restart: unless-stopped
     environment:

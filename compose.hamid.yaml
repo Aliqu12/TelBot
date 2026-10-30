@@ -12,13 +12,13 @@
 #
 # Die Werte stammen aus der Datei .env im selben Ordner (oder aus den
 # Umgebungsvariablen eines Portainer-Stacks).
-name: hamid-qureshi-assistant
+name: hamid-afzal-assistant
 
 services:
   bot:
     build: .
-    image: telegram-assistant:0.3.1
-    container_name: hamid-qureshi-assistant
+    image: telegram-assistant:0.3.2
+    container_name: hamid-afzal-assistant
     restart: unless-stopped
     environment:
       # ":?" bricht mit einer klaren Meldung ab, falls ein Pflichtwert fehlt.
