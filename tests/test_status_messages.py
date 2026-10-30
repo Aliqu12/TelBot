@@ -124,13 +124,20 @@ def test_instructions_name_the_owner_and_describe_the_event() -> None:
     assert "Ali" in stop and "kurz" in stop and "erfinde keine" in stop.lower()
 
 
-def test_greeting_demands_assalam_alaykum_and_farewell_khuda_or_allah_hafiz() -> None:
-    assert "Assalam Alaykum" in STARTUP_INSTRUCTION
-    assert "Assalam Alaykum" in START_COMMAND_INSTRUCTION
-    assert "Khuda Hafiz" in SHUTDOWN_INSTRUCTION and "Allah Hafiz" in SHUTDOWN_INSTRUCTION
-    assert STARTUP_FALLBACK.startswith("Assalam Alaykum") and "Hafiz" in SHUTDOWN_FALLBACK
-    prompt = build_system_prompt("Ali")
-    assert "Assalam Alaykum" in prompt and "Khuda Hafiz" in prompt and "keine KI" in prompt
+def test_code_texts_are_neutral_and_leave_the_persona_to_the_personality_file() -> None:
+    persona_words = ("Assalam", "Hafiz", "Firzana", "Urdu", "Chef")
+    texts = (
+        STARTUP_INSTRUCTION,
+        START_COMMAND_INSTRUCTION,
+        SHUTDOWN_INSTRUCTION,
+        STARTUP_FALLBACK,
+        SHUTDOWN_FALLBACK,
+        build_system_prompt("Persona", "Ali", email_enabled=True, tasks_enabled=True, images_enabled=True),
+    )
+    for text in texts:
+        assert not any(word in text for word in persona_words)
+    assert "Begrüßungsformel" in STARTUP_INSTRUCTION and "Begrüßungsformel" in START_COMMAND_INSTRUCTION
+    assert "Abschiedsformel" in SHUTDOWN_INSTRUCTION
 
 
 def make_real_assistant(tmp_path: Path, model: RecordingModel) -> Assistant:

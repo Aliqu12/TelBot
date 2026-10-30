@@ -26,7 +26,7 @@ MAX_TOOL_ROUNDS = 20
 TOOL_LIMIT_MESSAGE = "Ich konnte die Anfrage nicht vollständig bearbeiten. Formuliere sie bitte etwas einfacher."
 TOOL_LIMIT_SITUATION = (
     "Die Anfrage war zu verwickelt, du bist beim Bearbeiten nicht zum Ziel gekommen und hast sie nicht "
-    "vollständig erledigt. Er soll sie bitte einfacher oder in kleineren Schritten formulieren."
+    "vollständig erledigt. Der Nutzer soll sie bitte einfacher oder in kleineren Schritten formulieren."
 )
 # Kurze Nachrichten sollen schnell kommen; klappt die Formulierung durch das Modell nicht, gilt der feste Text.
 NOTICE_TIMEOUT_SECONDS = 10.0
@@ -113,7 +113,7 @@ class Assistant:
         )
 
     async def write_notice(self, instruction: str, fallback: str, timeout: float = NOTICE_TIMEOUT_SECONDS) -> str:
-        """Lässt das Modell eine kurze Nachricht in Firzanas Worten schreiben (Begrüßung, Fehlererklärung usw.).
+        """Lässt das Modell eine kurze Nachricht in der Persönlichkeit des Assistenten schreiben (Begrüßung, Fehlererklärung usw.).
 
         Bei Modellfehler, Zeitüberschreitung oder unbrauchbarer Antwort wird der feste ``fallback``
         zurückgegeben; diese Methode löst nie einen Modellfehler aus.

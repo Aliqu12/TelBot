@@ -21,6 +21,10 @@ RUN groupadd --system --gid 10001 assistant \
     && chown assistant:assistant /data
 
 COPY assistant_bot/ ./assistant_bot/
+# Neutrale Standard-Persönlichkeit und die mitgelieferten Persönlichkeiten (z. B. personalities/firzana.md).
+# Ausgewählt wird per PERSONALITY_FILE.
+COPY personality.md ./personality.md
+COPY personalities/ ./personalities/
 
 ENV DATABASE_PATH=/data/assistant.db
 

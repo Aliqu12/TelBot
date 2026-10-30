@@ -1,5 +1,6 @@
 # Geheimnisse
 .env
+.env.*
 
 # Python
 __pycache__/
@@ -17,3 +18,4 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+

@@ -11,9 +11,9 @@ Funktionen (MVP):
 - Persistenter, begrenzter Gesprächsverlauf pro Chat
 - Befehle `/start`, `/help`, `/reset`, `/whoami`
 - Nur private Chats, nur ein freigegebener Telegram-Nutzer
-- Statusmeldungen: Beim Start schickt Firzana dem freigegebenen Nutzer eine Begrüßung (immer mit "Assalam Alaykum"), beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung (mit "Khuda Hafiz" oder "Allah Hafiz"). Beide Texte formuliert das Sprachmodell jedes Mal neu (im Stil des Systemprompts, Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
-- Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in Firzanas Worten, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
-- Zentraler, anpassbarer Systemprompt
+- Statusmeldungen: Beim Start schickt der Assistent dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (in der Persönlichkeit aus `PERSONALITY_FILE`, bei Firzana mit "Assalam Alaykum" und "Khuda Hafiz"/"Allah Hafiz"; Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
+- Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in der Persönlichkeit aus `PERSONALITY_FILE`, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
+- Austauschbare Persönlichkeit: Name, Biografie, Sprache, Begrüßung und Abschied stehen in einer Textdatei (`personality.md` neutral als Standard, `personalities/firzana.md` mitgeliefert), die allgemeinen Regeln im Code (siehe [Persönlichkeit](#persönlichkeit-personalitymd))
 - Optional: E-Mail-Integration (Yahoo Mail) – lesen, suchen, Entwürfe und Antworten;
   Versand nur nach Bestätigung per Schaltfläche (siehe [E-Mail-Integration](#e-mail-integration-yahoo))
 - Optional: Aufgaben-Integration (Todoist) – Aufgaben per Nachricht anlegen, anzeigen, ändern,
@@ -46,7 +46,7 @@ Funktionen (MVP):
 │   ├── __main__.py           Einstiegspunkt: Konfiguration, Logging, Verdrahtung, Polling
 │   ├── config.py             Umgebungsvariablen laden und validieren (Settings)
 │   ├── logging_config.py     Logging nach stdout, Geheimnisse werden geschwärzt
-│   ├── prompts.py            Zentraler Systemprompt
+│   ├── prompts.py            Allgemeine Prompt-Regeln und Anweisungen (Persönlichkeit steht in personality.md)
 │   ├── messages.py           ChatMessage (gemeinsames Nachrichtenmodell)
 │   ├── llm/                  Sprachmodell-Anbindung (OpenRouter oder Groq)
 │   │   ├── base.py           ChatModel-Protokoll, Fehlerklassen, Antwortbereinigung
@@ -80,6 +80,8 @@ Funktionen (MVP):
 │       ├── access.py         Zugriffskontrolle (AccessPolicy)
 │       └── message_split.py  Lange Antworten aufteilen
 ├── tests/                    pytest, ohne echte Zugangsdaten
+├── personality.md            Neutrale Standard-Persönlichkeit
+├── personalities/            Fertige Persönlichkeiten (firzana.md), Auswahl über PERSONALITY_FILE
 ├── Dockerfile
 ├── compose.yaml
 ├── .env.example
@@ -200,6 +202,7 @@ keine Netzwerk- oder kostenpflichtigen API-Anfragen ausgeführt. Abgedeckt sind:
 - E-Mail-Integration mit gefälschten IMAP/SMTP-Verbindungen (`tests/test_email_*.py`, `tests/test_mail_mime.py`, `tests/test_yahoo_provider.py`)
 - Aufgaben-Integration mit gemockter Todoist-API (`tests/test_task_*.py`, `tests/test_todoist_provider.py`)
 - Bildverarbeitung: Konfiguration, Bildprüfung, Modellwahl, Telegram-Handler (`tests/test_images.py`)
+- Persönlichkeitsdatei: Laden, Fehlerfälle, Systemprompt (`tests/test_personality.py`)
 
 In VS Code können die Tests auch über die Test-Ansicht (Kolben-Symbol) mit pytest ausgeführt werden.
 
@@ -329,12 +332,14 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `GROQ_API_KEY` | bei `groq` | – | Groq API-Key. Nur der Key des gewählten Anbieters ist Pflicht |
 | `ALLOWED_TELEGRAM_USER_ID` | nein | leer | Einzige erlaubte User-ID. Leer = Einrichtungsmodus |
 | `OWNER_NAME` | nein | `Ali` | Name des Besitzers im Systemprompt |
+| `PERSONALITY_FILE` | nein | `personality.md` | Textdatei mit der Persönlichkeit (UTF-8, höchstens 20000 Zeichen). Fehlt sie oder ist sie leer, bricht der Start mit einer Meldung ab |
 | `LLM_MODEL` | ja | – | Modell-ID für Textnachrichten, z. B. `openai/gpt-oss-120b`. Muss Werkzeugaufrufe können |
 | `LLM_IMAGE_MODEL` | nein | leer | Modell für Fotos. Leer = das Textmodell verarbeitet auch Bilder (muss dann Bilder verstehen) |
 | `LLM_TEMPERATURE` | nein | `0.7` | 0 bis 2 |
 | `LLM_MAX_TOKENS` | nein | `2048` | Maximale Antwortlänge in Tokens (64 bis 32768). Bei Modellen mit Denkphase groß genug wählen |
 | `LLM_TIMEOUT_SECONDS` | nein | `60` | Timeout pro Anfrage (1 bis 600) |
 | `LLM_MAX_RETRIES` | nein | `2` | Automatische Wiederholungen (0 bis 10) |
+| `LLM_REASONING` | nein | `false` | `false` schaltet die Denkphase des Modells aus (nur OpenRouter). `true` lässt das Modell intern denken (langsamer), die Gedanken werden nie in die Antwort übernommen. Modelle, die nur mit Denkphase laufen, brauchen `true` |
 | `IMAGE_MAX_MB` | nein | `5` | Größte erlaubte Bilddatei in MB (1 bis 20). Bei Groq höchstens ca. 3 |
 | `HISTORY_MAX_MESSAGES` | nein | `20` | Kontextgröße in Nachrichten (1 bis 200) |
 | `IMAGE_HISTORY_MAX_MESSAGES` | nein | `4` | Verlauf in Nachrichten bei Bildanfragen (0 bis 200, `0` = keiner; nie mehr als `HISTORY_MAX_MESSAGES`) |
@@ -356,7 +361,48 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `TODOIST_TIMEOUT_SECONDS` | nein | `15` | Zeitlimit für Todoist-Anfragen (3 bis 120) |
 | `TIMEZONE` | nein | `Europe/Berlin` | Zeitzone für Datum/Uhrzeit (IANA-Name, z. B. `Europe/Vienna`) |
 
-Den Systemprompt anpassen: `assistant_bot/prompts.py`.
+Die Persönlichkeit anpassen: siehe [Persönlichkeit](#persönlichkeit-personalitymd).
+
+## Persönlichkeit (`personality.md`)
+
+Der Systemprompt besteht aus zwei Teilen:
+
+1. **Persönlichkeit** aus einer Textdatei: Standard ist die neutrale `personality.md` im Projektordner. Fertige
+   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`, `hamid.md`) und werden mit `PERSONALITY_FILE`
+   ausgewählt, z. B. `PERSONALITY_FILE=personalities/firzana.md`. Die Datei enthält Name,
+   Biografie, Charakter, Sprache und Anrede, Begrüßung, Abschied, Schreibstil und Tonfall bei Fehlern.
+2. **Allgemeine Regeln** in `assistant_bot/prompts.py`: Aufgaben, Ehrlichkeit, Freigaben, Datenschutz sowie die
+   Hinweise zu E-Mail, Aufgaben und Bildern. Sie gelten für jede Persönlichkeit.
+
+Im Text der Datei wird `{owner_name}` durch `OWNER_NAME` ersetzt. Alles andere (auch andere geschweifte
+Klammern) bleibt unverändert. Die Datei wird beim Start gelesen; nach einer Änderung den Bot bzw. Container neu starten.
+
+Begrüßung, Abschied und Fehlermeldungen schreibt das Sprachmodell nach den Regeln dieser Datei. Der Code selbst
+enthält keine persönlichkeitsspezifischen Formeln (die festen Ersatztexte bei Modellausfall sind neutral).
+Soll z. B. jede Begrüßung mit einer bestimmten Formel beginnen, steht das im Abschnitt "Begrüßung und Abschied"
+der Datei.
+
+### Zweiter Bot mit anderer Persönlichkeit
+
+Ein zweiter Container braucht einen eigenen Bot-Token (@BotFather), ein eigenes Volume (Datenbank) und einen
+eigenen Compose-Projekt- und Containernamen. `Dockerfile` und Code bleiben gleich. Die Persönlichkeit
+wählt `PERSONALITY_FILE`; der Ordner `personalities/` ist in den Container eingebunden.
+
+1. Persönlichkeit anlegen, z. B. `personalities/layla.md` (am einfachsten als Kopie von `personalities/firzana.md`
+   oder `personality.md`, dann anpassen).
+2. `compose.yaml` kopieren (z. B. nach `compose.layla.yaml`) und `name:` sowie `container_name:` ändern,
+   z. B. auf `telegram-assistant-layla`. Der Projektname bestimmt auch den Volume-Namen; bei gleichem Namen
+   würden sich beide Bots die Datenbank teilen.
+3. Eigene Env-Datei `.env.layla` mit neuem `TELEGRAM_BOT_TOKEN` und `PERSONALITY_FILE=personalities/layla.md`.
+   `OPENROUTER_API_KEY` und `LLM_MODEL` dürfen gleich bleiben. Die Datei enthält Geheimnisse und darf nicht
+   ins Repository.
+4. Starten:
+
+```powershell
+docker compose -f compose.layla.yaml --env-file .env.layla up -d --build
+```
+
+Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eigenen `.env`.
 
 ## Docker-Konfiguration erklärt
 
@@ -395,7 +441,7 @@ Den Systemprompt anpassen: `assistant_bot/prompts.py`.
 
 ## Erweitern
 
-- **Persönlichkeit:** `assistant_bot/prompts.py`.
+- **Persönlichkeit:** `personality.md` bzw. `personalities/*.md` (Auswahl über `PERSONALITY_FILE`); allgemeine Regeln in `assistant_bot/prompts.py`.
 - **Neue Befehle:** Methode in `BotHandlers` ergänzen, in `application.py` registrieren und
   in `BOT_COMMANDS` aufnehmen.
 - **Weitere Funktionen (Erinnerungen, Notizen, Tools, Homeserver-Integration):** in eigenen

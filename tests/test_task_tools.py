@@ -168,8 +168,8 @@ def test_assistant_creates_task_with_date_context(tmp_path: Path) -> None:
 
 
 def test_system_prompt_mentions_tasks_only_when_enabled() -> None:
-    assert "Todoist" not in build_system_prompt("Ali")
-    prompt = build_system_prompt("Ali", tasks_enabled=True)
+    assert "Todoist" not in build_system_prompt("Persona", "Ali")
+    prompt = build_system_prompt("Persona", "Ali", tasks_enabled=True)
     assert "Todoist" in prompt and "complete_task" in prompt
 
 

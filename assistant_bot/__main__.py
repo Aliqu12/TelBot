@@ -12,7 +12,7 @@ from telegram import Update
 from telegram.error import InvalidToken
 
 from .assistant import Assistant
-from .config import ConfigError, load_settings
+from .config import ConfigError, load_personality, load_settings
 from .conversation import ConversationService
 from .llm import create_chat_model, create_image_model
 from .logging_config import configure_logging
@@ -40,15 +40,22 @@ def main() -> int:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
+    try:
+        personality = load_personality(settings.personality_file)
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     configure_logging(settings.log_level, secrets=settings.secrets)
     logger.info(
-        "Starte Assistent (Anbieter=%s, Modell=%s, Bildmodell=%s, Kontext=%d Nachrichten, Datenbank=%s)",
+        "Starte Assistent (Anbieter=%s, Modell=%s, Bildmodell=%s, Kontext=%d Nachrichten, Datenbank=%s, "
+        "Persönlichkeit=%s)",
         settings.llm_provider,
         settings.llm_model,
         settings.llm_image_model or "wie Textmodell",
         settings.history_max_messages,
         settings.database_path,
+        settings.personality_file,
     )
 
     conversations = ConversationService(settings.database_path, settings.history_max_messages)
@@ -88,6 +95,7 @@ def main() -> int:
         chat_model=chat_model,
         conversations=conversations,
         system_prompt=build_system_prompt(
+            personality,
             settings.owner_name,
             email_enabled=email_service is not None,
             tasks_enabled=task_service is not None,

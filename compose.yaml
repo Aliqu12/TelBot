@@ -4,6 +4,10 @@
 #   Logs ansehen:           docker compose logs -f
 #   Stoppen:                docker compose down
 #
+# Standard mit neutraler Persönlichkeit (personality.md). Mit Firzana bzw. Hamid:
+#   docker compose -f compose.firzana.yaml up -d --build
+#   docker compose -f compose.hamid.yaml up -d --build
+#
 # Die Werte stammen aus der Datei .env im selben Ordner (oder aus den
 # Umgebungsvariablen eines Portainer-Stacks).
 name: telegram-assistant
@@ -24,10 +28,14 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       ALLOWED_TELEGRAM_USER_ID: ${ALLOWED_TELEGRAM_USER_ID:-}
       OWNER_NAME: ${OWNER_NAME:-Ali}
+      # Persönlichkeit des Assistenten (Textdatei, Pfad im Container). Standard: neutrale personality.md.
+      # Mitgelieferte Beispiele: personalities/firzana.md. Eigene Dateien einfach in ./personalities ablegen.
+      PERSONALITY_FILE: ${PERSONALITY_FILE:-personality.md}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_REASONING: ${LLM_REASONING:-false}
       # Bilder (leer = das Textmodell verarbeitet auch Bilder)
       LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
       IMAGE_MAX_MB: ${IMAGE_MAX_MB:-5}
@@ -55,6 +63,8 @@ services:
       DATABASE_PATH: /data/assistant.db
     volumes:
       - assistant-data:/data
+      # Persönlichkeiten: Änderungen und neue Dateien wirken nach einem Neustart, ohne das Image neu zu bauen.
+      - ./personalities:/app/personalities:ro
     # Keine Ports: Long Polling, IMAP/SMTP und Todoist (HTTPS) bauen nur ausgehende Verbindungen auf.
     read_only: true
     tmpfs:

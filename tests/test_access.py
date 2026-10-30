@@ -210,14 +210,14 @@ def test_start_command_greeting_comes_from_the_model_with_fallback() -> None:
 
     asyncio.run(handlers.start_command(update, make_context()))
     assistant.write_notice.side_effect = None
-    assistant.write_notice.return_value = "Assalam Alaykum Ali, schön dass du da bist!"
+    assistant.write_notice.return_value = "Hallo Ali, schön dass du da bist!"
     generated = make_update(OWNER_ID, "/start")
     asyncio.run(handlers.start_command(generated, make_context()))
 
-    assert replies(update)[0].startswith("Assalam Alaykum Ali")
-    assert replies(generated) == ["Assalam Alaykum Ali, schön dass du da bist!"]
+    assert replies(update)[0].startswith("Hallo Ali")
+    assert replies(generated) == ["Hallo Ali, schön dass du da bist!"]
     instruction = assistant.write_notice.await_args.args[0]
-    assert "Assalam Alaykum" in instruction and "Ali" in instruction
+    assert "Begrüßungsformel" in instruction and "Ali" in instruction
 
 
 def test_reset_command_clears_history_for_owner() -> None:

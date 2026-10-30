@@ -1,0 +1,85 @@
+# Persönlicher Telegram-KI-Assistent - Variante mit Persönlichkeit "Firzana"
+#
+#   Starten/aktualisieren:  docker compose -f compose.firzana.yaml up -d --build
+#   Logs ansehen:           docker compose -f compose.firzana.yaml logs -f
+#   Stoppen:                docker compose -f compose.firzana.yaml down
+#
+# Identisch zu compose.yaml (Standard, neutrale personality.md), nur mit
+# PERSONALITY_FILE=personalities/firzana.md. Wichtig: Beide Dateien teilen sich
+# Projektnamen, Container und Datenvolume. Änderungen an einer Datei also in der
+# anderen nachziehen. Umschalten: einfach mit der jeweils anderen Datei neu starten.
+#
+# Die Werte stammen aus der Datei .env im selben Ordner (oder aus den
+# Umgebungsvariablen eines Portainer-Stacks).
+name: firzana-khan-assistant
+
+services:
+  bot:
+    build: .
+    image: telegram-assistant:0.3.2
+    container_name: firzana-khan-assistant
+    restart: unless-stopped
+    environment:
+      # ":?" bricht mit einer klaren Meldung ab, falls ein Pflichtwert fehlt.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN fehlt in .env}
+      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL fehlt in .env}
+      # Nur der Key des gewählten Anbieters ist Pflicht (wird beim Start geprüft).
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ALLOWED_TELEGRAM_USER_ID: ${ALLOWED_TELEGRAM_USER_ID:-}
+      OWNER_NAME: ${OWNER_NAME:-Ali}
+      # Persönlichkeit: Firzana (mitgeliefert in ./personalities). Mit .env überschreibbar.
+      PERSONALITY_FILE: ${PERSONALITY_FILE:-personalities/firzana.md}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_REASONING: ${LLM_REASONING:-false}
+      # Bilder (leer = das Textmodell verarbeitet auch Bilder)
+      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
+      IMAGE_MAX_MB: ${IMAGE_MAX_MB:-5}
+      HISTORY_MAX_MESSAGES: ${HISTORY_MAX_MESSAGES:-20}
+      IMAGE_HISTORY_MAX_MESSAGES: ${IMAGE_HISTORY_MAX_MESSAGES:-4}
+      STATUS_MESSAGES_ENABLED: ${STATUS_MESSAGES_ENABLED:-true}
+      STATUS_LLM_MAX_PER_MINUTE: ${STATUS_LLM_MAX_PER_MINUTE:-2}
+      MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-4000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # E-Mail (optional, leer = deaktiviert)
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
+      EMAIL_ADDRESS: ${EMAIL_ADDRESS:-}
+      EMAIL_APP_PASSWORD: ${EMAIL_APP_PASSWORD:-}
+      EMAIL_SENDER_NAME: ${EMAIL_SENDER_NAME:-}
+      EMAIL_ALLOWED_RECIPIENTS: ${EMAIL_ALLOWED_RECIPIENTS:-}
+      EMAIL_DRAFT_TTL_SECONDS: ${EMAIL_DRAFT_TTL_SECONDS:-900}
+      EMAIL_TIMEOUT_SECONDS: ${EMAIL_TIMEOUT_SECONDS:-30}
+      EMAIL_MAX_BODY_CHARS: ${EMAIL_MAX_BODY_CHARS:-6000}
+      # Aufgaben (optional, leer = deaktiviert)
+      TASK_PROVIDER: ${TASK_PROVIDER:-}
+      TODOIST_API_TOKEN: ${TODOIST_API_TOKEN:-}
+      TODOIST_TIMEOUT_SECONDS: ${TODOIST_TIMEOUT_SECONDS:-15}
+      TIMEZONE: ${TIMEZONE:-Europe/Berlin}
+      # Im Container fest: liegt im persistenten Volume.
+      DATABASE_PATH: /data/assistant.db
+    volumes:
+      - assistant-data:/data
+      # Persönlichkeiten: Änderungen und neue Dateien wirken nach einem Neustart, ohne das Image neu zu bauen.
+      - ./personalities:/app/personalities:ro
+    # Keine Ports: Long Polling, IMAP/SMTP und Todoist (HTTPS) bauen nur ausgehende Verbindungen auf.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  assistant-data:

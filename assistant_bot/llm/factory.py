@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from openai import AsyncOpenAI
 
@@ -22,11 +22,20 @@ class ProviderSpec:
     base_url: str
     # Name des Parameters für die maximale Antwortlänge (die Anbieter akzeptieren unterschiedliche Namen).
     max_tokens_param: str
+    # Zusätzlicher Request-Inhalt je Reasoning-Modus (None = vom Anbieter nicht unterstützt).
+    reasoning_off: dict[str, Any] | None = None  # Denkphase abgeschaltet
+    reasoning_hidden: dict[str, Any] | None = None  # Modell denkt, die Gedanken werden nicht mitgeliefert
 
 
 # Die Schlüssel müssen zu ``config.SUPPORTED_LLM_PROVIDERS`` passen.
 PROVIDERS: dict[str, ProviderSpec] = {
-    "openrouter": ProviderSpec("OpenRouter", "https://openrouter.ai/api/v1", "max_tokens"),
+    "openrouter": ProviderSpec(
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        "max_tokens",
+        reasoning_off={"reasoning": {"enabled": False}},
+        reasoning_hidden={"reasoning": {"exclude": True}},
+    ),
     "groq": ProviderSpec("Groq", "https://api.groq.com/openai/v1", "max_completion_tokens"),
 }
 
@@ -66,4 +75,5 @@ def _create_model(settings: Settings, model: str) -> OpenAICompatibleChatModel:
         max_tokens=settings.llm_max_tokens,
         max_tokens_param=spec.max_tokens_param,
         provider_name=spec.display_name,
+        extra_body=spec.reasoning_hidden if settings.llm_reasoning else spec.reasoning_off,
     )
