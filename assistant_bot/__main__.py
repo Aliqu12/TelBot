@@ -26,6 +26,9 @@ from .tasks.service import TaskService
 from .tasks.tools import build_task_tools
 from .telegram_bot.application import build_application
 from .tools import Tool, ToolRegistry
+from .web.factory import create_web_provider
+from .web.service import WebService
+from .web.tools import build_web_tools
 
 logger = logging.getLogger("assistant_bot")
 
@@ -68,6 +71,7 @@ def main() -> int:
     timezone = ZoneInfo(settings.timezone)
     email_service: EmailService | None = None
     task_service: TaskService | None = None
+    web_service: WebService | None = None
     tools: list[Tool] = []
     if settings.email is not None:
         email_service = EmailService(
@@ -88,6 +92,20 @@ def main() -> int:
         logger.info(
             "Aufgaben-Integration aktiv (Provider=%s, Zeitzone=%s).", task_service.provider_name, settings.timezone
         )
+    if settings.web is not None:
+        web_service = WebService(
+            create_web_provider(settings.web),
+            max_results=settings.web.max_results,
+            max_chars=settings.web.max_chars,
+            max_calls_per_day=settings.web.max_calls_per_day,
+            timezone=timezone,
+        )
+        tools += build_web_tools(web_service)
+        logger.info(
+            "Websuche aktiv (Provider=%s, Tageslimit=%s).",
+            web_service.provider_name,
+            settings.web.max_calls_per_day or "unbegrenzt",
+        )
 
     chat_model = create_chat_model(settings)
     image_model = create_image_model(settings, chat_model)
@@ -100,6 +118,7 @@ def main() -> int:
             email_enabled=email_service is not None,
             tasks_enabled=task_service is not None,
             images_enabled=image_model is not None,
+            web_enabled=web_service is not None,
         ),
         tools=ToolRegistry(tools) if tools else None,
         timezone=timezone,
@@ -112,6 +131,7 @@ def main() -> int:
         email_service,
         task_service,
         StatusRateLimiter(settings.database_path, settings.status_llm_max_per_minute),
+        web_service=web_service,
     )
 
     try:

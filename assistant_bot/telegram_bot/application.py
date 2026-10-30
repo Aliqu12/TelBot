@@ -23,6 +23,7 @@ from ..mail.service import EmailService
 from ..prompts import SHUTDOWN_INSTRUCTION, STARTUP_INSTRUCTION
 from ..status_limiter import StatusRateLimiter
 from ..tasks.service import TaskService
+from ..web.service import WebService
 from .access import AccessPolicy
 from .email_confirmation import CALLBACK_PATTERN, EmailConfirmationHandlers
 from .handlers import BotHandlers
@@ -91,6 +92,7 @@ def build_application(
     email_service: EmailService | None = None,
     task_service: TaskService | None = None,
     status_limiter: StatusRateLimiter | None = None,
+    web_service: WebService | None = None,
 ) -> Application:
     access = AccessPolicy(settings.allowed_telegram_user_id)
     email_confirmation = (
@@ -107,6 +109,7 @@ def build_application(
         max_image_bytes=settings.image_max_bytes,
         email_confirmation=email_confirmation,
         task_confirmation=task_confirmation,
+        web_enabled=web_service is not None,
     )
 
     async def post_init(application: Application) -> None:
@@ -148,6 +151,8 @@ def build_application(
         await assistant.aclose()
         if task_service is not None:
             await task_service.aclose()
+        if web_service is not None:
+            await web_service.aclose()
         logger.info("Bot beendet.")
 
     application = (

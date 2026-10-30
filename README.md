@@ -20,6 +20,8 @@ Funktionen (MVP):
   erledigen; Löschen nur nach Bestätigung (siehe [Aufgaben-Integration](#aufgaben-integration-todoist))
 - Optional: Bilder verarbeiten (Modell mit Bildverständnis) – Text aus Fotos lesen,
   Bilder beschreiben, Fragen zum Bild beantworten (siehe [Bildverarbeitung](#bildverarbeitung-vision-modell))
+- Optional: Websuche (Tavily) – im Internet recherchieren und Webseiten lesen, mit Tageslimit
+  (siehe [Websuche](#websuche-tavily))
 
 ## Inhalt
 
@@ -37,6 +39,7 @@ Funktionen (MVP):
 12. [E-Mail-Integration (Yahoo)](#e-mail-integration-yahoo)
 13. [Aufgaben-Integration (Todoist)](#aufgaben-integration-todoist)
 14. [Bildverarbeitung (Vision-Modell)](#bildverarbeitung-vision-modell)
+15. [Websuche (Tavily)](#websuche-tavily)
 
 ## Architektur
 
@@ -72,6 +75,13 @@ Funktionen (MVP):
 │   │   ├── tools.py          Aufgaben-Werkzeuge für das Sprachmodell (ohne direktes Löschen)
 │   │   ├── check.py          Verbindungstest: python -m assistant_bot.tasks.check
 │   │   └── factory.py        Provider-Auswahl über TASK_PROVIDER
+│   ├── web/                  Websuche (optional)
+│   │   ├── models.py         Suchtreffer, Seiten, Fehlerklassen
+│   │   ├── provider.py       WebProvider-Protokoll (Schnittstelle für Tavily, ...)
+│   │   ├── tavily.py         TavilyWebProvider (Search- und Extract-API über httpx)
+│   │   ├── service.py        WebService: Eingabe-/URL-Prüfung, Kürzen, Tageslimit
+│   │   ├── tools.py          Werkzeuge web_search und read_webpage, Inhalte als Daten markiert
+│   │   └── factory.py        Provider-Auswahl über WEB_SEARCH_PROVIDER
 │   └── telegram_bot/
 │       ├── application.py    Aufbau der python-telegram-bot Application
 │       ├── handlers.py       Befehle, Textnachrichten, Fehlerbehandlung
@@ -359,6 +369,12 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `TASK_PROVIDER` | nein | leer | `todoist` aktiviert die Aufgaben-Funktionen. Leer = deaktiviert |
 | `TODOIST_API_TOKEN` | bei Aufgaben | – | API-Token aus Todoist (Einstellungen -> Integrationen -> Entwickler) |
 | `TODOIST_TIMEOUT_SECONDS` | nein | `15` | Zeitlimit für Todoist-Anfragen (3 bis 120) |
+| `WEB_SEARCH_PROVIDER` | nein | leer | `tavily` aktiviert die Websuche. Leer = deaktiviert |
+| `TAVILY_API_KEY` | bei Websuche | – | API-Key von app.tavily.com |
+| `WEB_TIMEOUT_SECONDS` | nein | `20` | Zeitlimit für Such- und Leseanfragen (3 bis 120) |
+| `WEB_MAX_RESULTS` | nein | `5` | Treffer pro Suche (1 bis 20) |
+| `WEB_MAX_CHARS` | nein | `4000` | Max. Zeichen pro Treffer bzw. gelesener Seite, die an das Sprachmodell gehen (500 bis 50000) |
+| `WEB_MAX_CALLS_PER_DAY` | nein | `30` | Max. Such-/Leseanfragen pro Tag (0 bis 10000, `0` = unbegrenzt). Zähler im Arbeitsspeicher, ein Neustart setzt ihn zurück |
 | `TIMEZONE` | nein | `Europe/Berlin` | Zeitzone für Datum/Uhrzeit (IANA-Name, z. B. `Europe/Vienna`) |
 
 Die Persönlichkeit anpassen: siehe [Persönlichkeit](#persönlichkeit-personalitymd).
@@ -968,3 +984,79 @@ geht nicht – als Foto senden).
 8. Mit aktiver Todoist-Integration: Foto eines Termins + "Erstell daraus eine Aufgabe" -> Aufgabe in Todoist.
 9. Fremdes Telegram-Konto schickt ein Foto -> keine Reaktion, Log "Zugriff verweigert", kein Modellaufruf.
 10. `LLM_IMAGE_MODEL` auf ein Modell ohne Bildverständnis setzen -> Foto ergibt "Das Bild konnte nicht verarbeitet werden".
+
+## Websuche (Tavily)
+
+Optional. Mit aktiver Websuche kann der Assistent im Internet recherchieren: aktuelle
+Informationen nachschlagen (Nachrichten, Preise, Öffnungszeiten, Versionen) und Webseiten lesen,
+z. B. einen Link, den du ihm schickst. Er nennt dabei die Quelle.
+
+### Ablauf
+
+Die Auswertung macht das normale Sprachmodell (`LLM_MODEL`) in der bestehenden
+Tool-Calling-Schleife. Es gibt keinen zusätzlichen Modellaufruf.
+
+```mermaid
+sequenceDiagram
+    participant U as Du
+    participant L as Sprachmodell
+    participant W as WebService
+    participant T as Tavily
+    U->>L: "Was kostet ein Raspberry Pi 5 aktuell?"
+    L->>W: web_search("Raspberry Pi 5 Preis")
+    W->>T: POST /search
+    T-->>W: Treffer (Titel, URL, Ausschnitt)
+    W-->>L: gekürzt, als Daten markiert
+    L->>W: read_webpage(url) (optional)
+    W->>T: POST /extract
+    T-->>W: Seitentext
+    W-->>L: gekürzt, als Daten markiert
+    L-->>U: Antwort mit Quelle
+```
+
+- Zwei Werkzeuge: `web_search` (Suche) und `read_webpage` (Seite lesen).
+- Treffer und Seiten werden auf `WEB_MAX_RESULTS` bzw. `WEB_MAX_CHARS` gekürzt, um Tokens zu sparen.
+- Jede Suche und jedes Lesen zählt gegen `WEB_MAX_CALLS_PER_DAY` (Standard 30). Ist das Limit
+  erreicht, sagt der Assistent das; am nächsten Tag (Zeitzone `TIMEZONE`) oder nach einem Neustart geht es weiter.
+
+### Einrichtung
+
+1. Konto auf <https://app.tavily.com> anlegen und einen API-Key erzeugen. Das Gratis-Kontingent
+   (Credits pro Monat, aktuelle Werte auf der Tavily-Seite) reicht für den privaten Gebrauch.
+   Eine Suche (`basic`) kostet 1 Credit, das Lesen von bis zu 5 Seiten 1 Credit.
+2. In der `.env`:
+
+   ```dotenv
+   WEB_SEARCH_PROVIDER=tavily
+   TAVILY_API_KEY=tvly-...
+   WEB_MAX_CALLS_PER_DAY=30
+   ```
+
+3. Bot neu starten. Im Log erscheint `Websuche aktiv (Provider=tavily, Tageslimit=30).`, und `/help` erwähnt die Websuche.
+
+### Sicherheit
+
+- Webseiten werden von Tavily abgerufen, nicht vom Bot. Der Bot selbst ruft keine beliebigen
+  URLs auf und kann so nicht ins eigene Netz (Router, Homeserver) umgeleitet werden.
+- `read_webpage` akzeptiert zusätzlich nur öffentliche `http(s)`-Adressen mit Hostnamen:
+  keine IP-Adressen, kein `localhost`, keine `.local`/`.internal`-Namen, keine Zugangsdaten in der URL.
+- Inhalte aus dem Netz sind zwischen `<<<WEB_DATEN>>>` und `<<<ENDE_WEB_DATEN>>>` eingeschlossen
+  und als fremde Daten gekennzeichnet. Das Modell soll darin enthaltene Anweisungen nicht befolgen
+  (Schutz vor Prompt Injection). E-Mail-Versand und Löschen von Aufgaben brauchen ohnehin deine Bestätigung.
+- Suchanfragen und Seiteninhalte werden nicht geloggt, nur Fehler mit HTTP-Status. Die
+  Suchbegriffe gehen allerdings an Tavily.
+
+### Weitere Provider
+
+Neuer Provider (z. B. Brave Search): Klasse mit `search()`, `extract()` und `aclose()` nach dem
+`WebProvider`-Protokoll (`web/provider.py`) schreiben, in `web/factory.py` eintragen und in
+`config.SUPPORTED_WEB_PROVIDERS` ergänzen.
+
+### Manuelle Testcheckliste
+
+1. Start: Log zeigt "Websuche aktiv"; `/help` nennt die Websuche.
+2. "Wer hat gestern in der Bundesliga gewonnen?" -> aktuelle Antwort mit Quelle.
+3. Link schicken mit "Fass das zusammen" -> Zusammenfassung der Seite.
+4. Smalltalk ("Wie geht's?") -> keine Suche (im Log kein `Werkzeug ausgeführt: web_search`).
+5. `WEB_MAX_CALLS_PER_DAY=1`, zwei Recherchen -> zweite wird mit Hinweis auf das Tageslimit abgelehnt.
+6. Falschen `TAVILY_API_KEY` setzen -> verständliche Fehlermeldung, Log `HTTP 401`.

@@ -30,6 +30,8 @@ _FALSE_VALUES = ("false", "0", "no", "nein", "off")
 SUPPORTED_EMAIL_PROVIDERS = ("yahoo",)
 # Muss zu den Providern in ``tasks.factory`` passen.
 SUPPORTED_TASK_PROVIDERS = ("todoist",)
+# Muss zu den Providern in ``web.factory`` passen.
+SUPPORTED_WEB_PROVIDERS = ("tavily",)
 
 # Anbieter für das Sprachmodell; muss zu ``llm.factory.PROVIDERS`` passen.
 SUPPORTED_LLM_PROVIDERS = ("openrouter", "groq")
@@ -69,6 +71,18 @@ class TaskSettings:
 
 
 @dataclass(frozen=True)
+class WebSettings:
+    """Konfiguration der optionalen Websuche (z. B. Tavily)."""
+
+    provider: str
+    api_key: str = field(repr=False)
+    timeout_seconds: float = 20.0
+    max_results: int = 5  # Treffer pro Suche
+    max_chars: int = 4000  # Zeichen pro Treffer bzw. gelesener Seite
+    max_calls_per_day: int = 30  # 0 = unbegrenzt
+
+
+@dataclass(frozen=True)
 class Settings:
     """Validierte, unveränderliche Anwendungskonfiguration."""
 
@@ -89,6 +103,7 @@ class Settings:
     log_level: str
     email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
     tasks: TaskSettings | None = None  # None = Aufgaben-Integration deaktiviert
+    web: WebSettings | None = None  # None = Websuche deaktiviert
     timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
     llm_image_model: str | None = None  # None = Bilder gehen an das Textmodell (llm_model)
     image_max_mb: int = DEFAULT_IMAGE_MAX_MB
@@ -110,6 +125,8 @@ class Settings:
             secrets += (self.email.app_password,)
         if self.tasks is not None:
             secrets += (self.tasks.api_token,)
+        if self.web is not None:
+            secrets += (self.web.api_key,)
         return secrets
 
 
@@ -241,6 +258,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         log_level=log_level,
         email=_load_email_settings(reader, owner_name),
         tasks=_load_task_settings(reader),
+        web=_load_web_settings(reader),
         timezone=_load_timezone(reader),
         llm_image_model=reader.raw("LLM_IMAGE_MODEL") or None,
         image_max_mb=reader.integer("IMAGE_MAX_MB", DEFAULT_IMAGE_MAX_MB, 1, MAX_IMAGE_MB_LIMIT),
@@ -358,6 +376,31 @@ def _load_task_settings(reader: _EnvReader) -> TaskSettings | None:
         provider=provider,
         api_token=api_token,
         timeout_seconds=reader.number("TODOIST_TIMEOUT_SECONDS", 15.0, 3.0, 120.0),
+    )
+
+
+def _load_web_settings(reader: _EnvReader) -> WebSettings | None:
+    provider = reader.raw("WEB_SEARCH_PROVIDER").lower()
+    if not provider:
+        return None
+    if provider not in SUPPORTED_WEB_PROVIDERS:
+        reader.errors.append(
+            f"WEB_SEARCH_PROVIDER {provider!r} wird nicht unterstützt (möglich: {', '.join(SUPPORTED_WEB_PROVIDERS)})."
+        )
+
+    api_key = reader.raw("TAVILY_API_KEY")
+    if not api_key:
+        reader.errors.append("TAVILY_API_KEY fehlt (Pflichtwert, wenn WEB_SEARCH_PROVIDER=tavily gesetzt ist).")
+    elif any(char.isspace() for char in api_key) or not api_key.isprintable():
+        reader.errors.append("TAVILY_API_KEY darf keine Leer- oder Steuerzeichen enthalten.")
+
+    return WebSettings(
+        provider=provider,
+        api_key=api_key,
+        timeout_seconds=reader.number("WEB_TIMEOUT_SECONDS", 20.0, 3.0, 120.0),
+        max_results=reader.integer("WEB_MAX_RESULTS", 5, 1, 20),
+        max_chars=reader.integer("WEB_MAX_CHARS", 4000, 500, 50000),
+        max_calls_per_day=reader.integer("WEB_MAX_CALLS_PER_DAY", 30, 0, 10000),
     )
 
 
