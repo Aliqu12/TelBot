@@ -368,7 +368,7 @@ Die Persönlichkeit anpassen: siehe [Persönlichkeit](#persönlichkeit-personali
 Der Systemprompt besteht aus zwei Teilen:
 
 1. **Persönlichkeit** aus einer Textdatei: Standard ist die neutrale `personality.md` im Projektordner. Fertige
-   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`) und werden mit `PERSONALITY_FILE`
+   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`, `hamid.md`) und werden mit `PERSONALITY_FILE`
    ausgewählt, z. B. `PERSONALITY_FILE=personalities/firzana.md`. Die Datei enthält Name,
    Biografie, Charakter, Sprache und Anrede, Begrüßung, Abschied, Schreibstil und Tonfall bei Fehlern.
 2. **Allgemeine Regeln** in `assistant_bot/prompts.py`: Aufgaben, Ehrlichkeit, Freigaben, Datenschutz sowie die
