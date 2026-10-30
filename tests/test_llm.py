@@ -80,6 +80,16 @@ def test_max_tokens_parameter_name_is_configurable() -> None:
     kwargs = create.await_args.kwargs
     assert kwargs["max_completion_tokens"] == 256
     assert "max_tokens" not in kwargs
+    assert "extra_body" not in kwargs
+
+
+def test_extra_body_is_sent_with_the_request() -> None:
+    body = {"reasoning": {"enabled": False}}
+    model, create = make_model(result=completion("ok"), extra_body=body)
+
+    asyncio.run(model.complete(MESSAGES))
+
+    assert create.await_args.kwargs["extra_body"] == body
 
 
 @pytest.mark.parametrize(
@@ -197,6 +207,14 @@ def test_factory_builds_openrouter_model_by_default(valid_env: dict[str, str]) -
     assert model._model == settings.llm_model
     assert model._max_tokens_param == "max_tokens"
     assert model._provider == "OpenRouter"
+    assert model._extra_body == {"reasoning": {"enabled": False}}
+    asyncio.run(model.aclose())
+
+
+def test_factory_hides_reasoning_when_enabled(valid_env: dict[str, str]) -> None:
+    model = create_chat_model(load_settings({**valid_env, "LLM_REASONING": "true"}))
+
+    assert model._extra_body == {"reasoning": {"exclude": True}}
     asyncio.run(model.aclose())
 
 
@@ -209,6 +227,7 @@ def test_factory_builds_groq_model_with_groq_url_and_parameter_name(valid_env: d
     assert str(model._client.base_url).rstrip("/") == "https://api.groq.com/openai/v1"
     assert model._client.api_key == "gsk_dummy"
     assert model._max_tokens_param == "max_completion_tokens"
+    assert model._extra_body is None
     asyncio.run(model.aclose())
 
 

@@ -35,6 +35,7 @@ services:
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_REASONING: ${LLM_REASONING:-false}
       # Bilder (leer = das Textmodell verarbeitet auch Bilder)
       LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
       IMAGE_MAX_MB: ${IMAGE_MAX_MB:-5}

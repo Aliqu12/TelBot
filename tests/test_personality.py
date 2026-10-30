@@ -41,6 +41,16 @@ def test_shipped_firzana_personality_has_greeting_and_farewell() -> None:
     assert "Firzana" in personality and "{owner_name}" in personality
     assert "Assalam Alaykum" in personality and "Khuda Hafiz" in personality and "Allah Hafiz" in personality
     assert "keine KI" in personality and "Aap" in personality
+    assert "Antworte standardmäßig auf Urdu" in personality
+
+
+def test_shipped_hamid_personality_is_informal_and_prefers_urdu() -> None:
+    personality = load_personality(PROJECT_ROOT / "personalities" / "hamid.md")
+
+    assert "Hamid" in personality and "{owner_name}" in personality
+    assert "Assalam Alaykum" in personality and "Khuda Hafiz" in personality and "Allah Hafiz" in personality
+    assert "keine KI" in personality and "Tum" in personality
+    assert "Antworte standardmäßig auf Urdu" in personality
 
 
 def test_load_personality_reads_utf8_and_strips_bom_and_whitespace(tmp_path: Path) -> None:

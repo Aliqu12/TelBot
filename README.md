@@ -339,6 +339,7 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `LLM_MAX_TOKENS` | nein | `2048` | Maximale Antwortlänge in Tokens (64 bis 32768). Bei Modellen mit Denkphase groß genug wählen |
 | `LLM_TIMEOUT_SECONDS` | nein | `60` | Timeout pro Anfrage (1 bis 600) |
 | `LLM_MAX_RETRIES` | nein | `2` | Automatische Wiederholungen (0 bis 10) |
+| `LLM_REASONING` | nein | `false` | `false` schaltet die Denkphase des Modells aus (nur OpenRouter). `true` lässt das Modell intern denken (langsamer), die Gedanken werden nie in die Antwort übernommen. Modelle, die nur mit Denkphase laufen, brauchen `true` |
 | `IMAGE_MAX_MB` | nein | `5` | Größte erlaubte Bilddatei in MB (1 bis 20). Bei Groq höchstens ca. 3 |
 | `HISTORY_MAX_MESSAGES` | nein | `20` | Kontextgröße in Nachrichten (1 bis 200) |
 | `IMAGE_HISTORY_MAX_MESSAGES` | nein | `4` | Verlauf in Nachrichten bei Bildanfragen (0 bis 200, `0` = keiner; nie mehr als `HISTORY_MAX_MESSAGES`) |
@@ -367,7 +368,7 @@ Die Persönlichkeit anpassen: siehe [Persönlichkeit](#persönlichkeit-personali
 Der Systemprompt besteht aus zwei Teilen:
 
 1. **Persönlichkeit** aus einer Textdatei: Standard ist die neutrale `personality.md` im Projektordner. Fertige
-   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`) und werden mit `PERSONALITY_FILE`
+   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`, `hamid.md`) und werden mit `PERSONALITY_FILE`
    ausgewählt, z. B. `PERSONALITY_FILE=personalities/firzana.md`. Die Datei enthält Name,
    Biografie, Charakter, Sprache und Anrede, Begrüßung, Abschied, Schreibstil und Tonfall bei Fehlern.
 2. **Allgemeine Regeln** in `assistant_bot/prompts.py`: Aufgaben, Ehrlichkeit, Freigaben, Datenschutz sowie die

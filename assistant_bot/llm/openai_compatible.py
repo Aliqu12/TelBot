@@ -45,6 +45,7 @@ class OpenAICompatibleChatModel:
         max_tokens: int,
         max_tokens_param: str = "max_tokens",
         provider_name: str = "LLM",
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -52,6 +53,7 @@ class OpenAICompatibleChatModel:
         self._max_tokens = max_tokens
         self._max_tokens_param = max_tokens_param
         self._provider = provider_name
+        self._extra_body = extra_body
 
     async def complete(self, messages: Sequence[ChatMessage]) -> str:
         choice = await self._request(messages)
@@ -83,6 +85,8 @@ class OpenAICompatibleChatModel:
 
     async def _request(self, messages: Sequence[ChatMessage], **extra: Any) -> Any:
         params: dict[str, Any] = {self._max_tokens_param: self._max_tokens}
+        if self._extra_body:
+            params["extra_body"] = self._extra_body
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
