@@ -96,6 +96,7 @@ class Settings:
     status_messages_enabled: bool = True  # Begrüßung beim Start und Abschied beim Beenden
     status_llm_max_per_minute: int = DEFAULT_STATUS_LLM_MAX_PER_MINUTE  # 0 = immer feste Texte
     personality_file: Path = Path(DEFAULT_PERSONALITY_FILE)  # Persönlichkeit des Assistenten (Textdatei)
+    llm_reasoning: bool = False  # True = Modell darf denken, die Gedanken werden aber nie mitgeliefert
 
     @property
     def image_max_bytes(self) -> int:
@@ -251,6 +252,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             "STATUS_LLM_MAX_PER_MINUTE", DEFAULT_STATUS_LLM_MAX_PER_MINUTE, 0, 60
         ),
         personality_file=Path(reader.text("PERSONALITY_FILE", DEFAULT_PERSONALITY_FILE)),
+        llm_reasoning=reader.boolean("LLM_REASONING", False),
     )
 
     if reader.errors:

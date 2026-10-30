@@ -339,6 +339,7 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `LLM_MAX_TOKENS` | nein | `2048` | Maximale Antwortlänge in Tokens (64 bis 32768). Bei Modellen mit Denkphase groß genug wählen |
 | `LLM_TIMEOUT_SECONDS` | nein | `60` | Timeout pro Anfrage (1 bis 600) |
 | `LLM_MAX_RETRIES` | nein | `2` | Automatische Wiederholungen (0 bis 10) |
+| `LLM_REASONING` | nein | `false` | `false` schaltet die Denkphase des Modells aus (nur OpenRouter). `true` lässt das Modell intern denken (langsamer), die Gedanken werden nie in die Antwort übernommen. Modelle, die nur mit Denkphase laufen, brauchen `true` |
 | `IMAGE_MAX_MB` | nein | `5` | Größte erlaubte Bilddatei in MB (1 bis 20). Bei Groq höchstens ca. 3 |
 | `HISTORY_MAX_MESSAGES` | nein | `20` | Kontextgröße in Nachrichten (1 bis 200) |
 | `IMAGE_HISTORY_MAX_MESSAGES` | nein | `4` | Verlauf in Nachrichten bei Bildanfragen (0 bis 200, `0` = keiner; nie mehr als `HISTORY_MAX_MESSAGES`) |
