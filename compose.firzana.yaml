@@ -58,6 +58,13 @@ services:
       TASK_PROVIDER: ${TASK_PROVIDER:-}
       TODOIST_API_TOKEN: ${TODOIST_API_TOKEN:-}
       TODOIST_TIMEOUT_SECONDS: ${TODOIST_TIMEOUT_SECONDS:-15}
+      # Websuche (optional, leer = deaktiviert)
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      WEB_TIMEOUT_SECONDS: ${WEB_TIMEOUT_SECONDS:-20}
+      WEB_MAX_RESULTS: ${WEB_MAX_RESULTS:-5}
+      WEB_MAX_CHARS: ${WEB_MAX_CHARS:-4000}
+      WEB_MAX_CALLS_PER_DAY: ${WEB_MAX_CALLS_PER_DAY:-30}
       TIMEZONE: ${TIMEZONE:-Europe/Berlin}
       # Im Container fest: liegt im persistenten Volume.
       DATABASE_PATH: /data/assistant.db

@@ -138,6 +138,7 @@ class BotHandlers:
         max_image_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
         email_confirmation: EmailConfirmationHandlers | None = None,
         task_confirmation: TaskConfirmationHandlers | None = None,
+        web_enabled: bool = False,
     ) -> None:
         self._assistant = assistant
         self._access = access
@@ -146,6 +147,7 @@ class BotHandlers:
         self._max_image_bytes = max_image_bytes
         self._email_confirmation = email_confirmation
         self._task_confirmation = task_confirmation
+        self._web_enabled = web_enabled
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message, user = update.effective_message, update.effective_user
@@ -178,7 +180,14 @@ class BotHandlers:
                 "- Schick mir ein Foto (gern mit einer Frage als Bildunterschrift), dann lese ich den Text "
                 "daraus oder beschreibe, was zu sehen ist.\n"
             )
-        access_line += "- Ich habe keinen Zugriff auf das Internet oder auf deine Dateien.\n\n"
+        if self._web_enabled:
+            access_line += (
+                "- Ich kann im Internet suchen und Webseiten lesen, z. B. für aktuelle Infos oder wenn du mir "
+                "einen Link schickst.\n"
+                "- Auf deine Dateien habe ich keinen Zugriff.\n\n"
+            )
+        else:
+            access_line += "- Ich habe keinen Zugriff auf das Internet oder auf deine Dateien.\n\n"
         await _reply(
             message,
             "So funktioniere ich:\n"
