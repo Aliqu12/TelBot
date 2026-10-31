@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -218,6 +218,24 @@ def test_list_tasks_follows_pagination_and_parses_due_variants() -> None:
     assert floating.time == datetime(2026, 10, 28, 9, 30, tzinfo=BERLIN)
     assert fixed.time == datetime(2026, 11, 1, 10, 0, tzinfo=BERLIN) and fixed.is_recurring
     assert fixed.text == "jeden Sonntag um 10 Uhr"
+
+
+def test_task_created_at_is_read_from_added_at() -> None:
+    recorder = Recorder(
+        httpx.Response(
+            200,
+            json={
+                "results": [task_json("a1", added_at="2026-10-30T08:15:00.000000Z"), task_json("a2")],
+                "next_cursor": None,
+            },
+        )
+    )
+    provider, _ = make_provider(recorder)
+
+    first, second = run(provider.list_tasks())
+
+    assert first.created_at == datetime(2026, 10, 30, 8, 15, tzinfo=UTC)
+    assert second.created_at is None
 
 
 def test_list_projects() -> None:

@@ -129,6 +129,13 @@ class Assistant:
             return fallback
         return text
 
+    async def record_notice(self, chat_id: int, marker: str, text: str) -> None:
+        """Speichert eine selbst gesendete Nachricht im Verlauf, damit der Nutzer direkt darauf antworten kann.
+
+        ``marker`` steht als Nutzerzeile davor, damit der Verlauf mit einer Nutzernachricht beginnt.
+        """
+        await self._conversations.add_exchange(chat_id, marker, text)
+
     async def explain_problem(self, situation: str, fallback: str) -> str:
         """Lässt das Modell einen Fehler menschlich erklären; ``situation`` beschreibt sachlich, was schiefging."""
         return await self.write_notice(ERROR_INSTRUCTION.format(situation=situation), fallback)

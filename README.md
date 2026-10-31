@@ -369,6 +369,11 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `TASK_PROVIDER` | nein | leer | `todoist` aktiviert die Aufgaben-Funktionen. Leer = deaktiviert |
 | `TODOIST_API_TOKEN` | bei Aufgaben | – | API-Token aus Todoist (Einstellungen -> Integrationen -> Entwickler) |
 | `TODOIST_TIMEOUT_SECONDS` | nein | `15` | Zeitlimit für Todoist-Anfragen (3 bis 120) |
+| `REMINDERS_ENABLED` | nein | `true` | Erinnerungen an fällige Aufgaben (nur mit Aufgaben-Integration und `ALLOWED_TELEGRAM_USER_ID`) |
+| `REMINDER_POLL_SECONDS` | nein | `300` | Wie oft Todoist auf anstehende Termine geprüft wird (60 bis 3600) |
+| `REMINDER_DEFAULT_TIME` | nein | `12:00` | Uhrzeit für Aufgaben, die nur ein Datum haben (`HH:MM`) |
+| `REMINDER_EARLY_HOURS` | nein | `24` | Erste Erinnerung so viele Stunden vor dem Termin (1 bis 168) |
+| `REMINDER_URGENT_HOURS` | nein | `2` | Zweite, dringlichere Erinnerung (muss kleiner als `REMINDER_EARLY_HOURS` sein) |
 | `WEB_SEARCH_PROVIDER` | nein | leer | `tavily` aktiviert die Websuche. Leer = deaktiviert |
 | `TAVILY_API_KEY` | bei Websuche | – | API-Key von app.tavily.com |
 | `WEB_TIMEOUT_SECONDS` | nein | `20` | Zeitlimit für Such- und Leseanfragen (3 bis 120) |
@@ -763,6 +768,27 @@ TIMEZONE=Europe/Berlin
 `TIMEZONE` bestimmt, wie "morgen", "heute" und Uhrzeiten interpretiert werden (Standard
 `Europe/Berlin`). Unter Windows liefert das Paket `tzdata` (in `requirements.txt`) die
 Zeitzonendaten; nach dem Update also einmal `pip install -r requirements.txt` ausführen.
+
+### Erinnerungen
+
+Ist die Aufgaben-Integration aktiv und `ALLOWED_TELEGRAM_USER_ID` gesetzt, prüft der Bot alle
+`REMINDER_POLL_SECONDS` Sekunden die offenen Aufgaben und erinnert **je Stufe genau einmal**:
+
+- **24 Stunden vorher** (`REMINDER_EARLY_HOURS`): freundliche Erinnerung.
+- **2 Stunden vorher** (`REMINDER_URGENT_HOURS`): dringlichere Erinnerung.
+
+Details:
+
+- Aufgaben nur mit Datum gelten ab `REMINDER_DEFAULT_TIME` (12:00 Uhr).
+- Die Texte schreibt das Sprachmodell in der Persönlichkeit des Bots (mit festem Ersatztext bei Ausfall).
+  Mehrere Aufgaben derselben Stufe kommen gebündelt in einer Nachricht.
+- Gesendete Erinnerungen stehen in der Datenbank (`task_reminders`) und überleben Neustarts. Wird ein Termin
+  verschoben oder wiederholt sich die Aufgabe, gilt das als neuer Termin und wird neu erinnert.
+- War der Bot offline, wird eine verpasste 24-h-Erinnerung nachgeholt, solange der Termin noch nicht erreicht ist.
+  Liegt der Termin schon im 2-h-Fenster, kommt nur die dringliche Erinnerung.
+- Eine Aufgabe, die erst nach dem Zeitpunkt der 24-h-Erinnerung angelegt wurde, bekommt diese Stufe nicht.
+- Die Erinnerung steht im Gesprächsverlauf, du kannst direkt antworten (z. B. "verschieb das auf morgen").
+- Abschalten: `REMINDERS_ENABLED=false`.
 
 ### Lokal starten (Windows)
 
