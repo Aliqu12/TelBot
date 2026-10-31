@@ -15,6 +15,6 @@ data
 tests
 *.md
 !personality.md
-compose.yaml
+compose*.yaml
 Dockerfile
 .dockerignore

@@ -4,75 +4,30 @@
 #   Logs ansehen:           docker compose logs -f
 #   Stoppen:                docker compose down
 #
-# Standard mit neutraler Persönlichkeit (personality.md). Mit Firzana bzw. Hamid:
-#   docker compose -f compose.firzana.yaml up -d --build
-#   docker compose -f compose.hamid.yaml up -d --build
+# Alle Einstellungen stehen in der Env-Datei (Vorlage: .env.example), nicht in dieser Datei.
+# Standard ist die Datei .env im selben Ordner.
 #
-# Die Werte stammen aus der Datei .env im selben Ordner (oder aus den
-# Umgebungsvariablen eines Portainer-Stacks).
-name: telegram-assistant
+# Mehrere Bots (z. B. mit verschiedenen Persönlichkeiten): je Bot eine eigene Env-Datei, z. B. .env.hamid mit
+#   COMPOSE_PROJECT_NAME=hamid-afzal-assistant   (Projekt-, Container- und Volume-Name)
+#   ENV_FILE=.env.hamid                          (diese Datei selbst, siehe .env.example)
+#   TELEGRAM_BOT_TOKEN=...                       (jeder Bot braucht einen eigenen Token)
+#   PERSONALITY_FILE=personalities/hamid.md
+# und beim Aufruf angeben:
+#   docker compose --env-file .env.hamid up -d --build
+#   docker compose --env-file .env.hamid logs -f
+name: ${COMPOSE_PROJECT_NAME:-telegram-assistant}
 
 services:
   bot:
     build: .
-    image: telegram-assistant:0.3.1
-    container_name: telegram-assistant
+    image: telegram-assistant:0.4.0
+    container_name: ${COMPOSE_PROJECT_NAME:-telegram-assistant}
     restart: unless-stopped
+    # Pflichtwerte und Grenzen prüft der Bot beim Start und meldet Fehler gesammelt im Log.
+    env_file:
+      - ${ENV_FILE:-.env}
     environment:
-      # ":?" bricht mit einer klaren Meldung ab, falls ein Pflichtwert fehlt.
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN fehlt in .env}
-      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL fehlt in .env}
-      # Nur der Key des gewählten Anbieters ist Pflicht (wird beim Start geprüft).
-      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      ALLOWED_TELEGRAM_USER_ID: ${ALLOWED_TELEGRAM_USER_ID:-}
-      OWNER_NAME: ${OWNER_NAME:-Ali}
-      # Persönlichkeit des Assistenten (Textdatei, Pfad im Container). Standard: neutrale personality.md.
-      # Mitgelieferte Beispiele: personalities/firzana.md. Eigene Dateien einfach in ./personalities ablegen.
-      PERSONALITY_FILE: ${PERSONALITY_FILE:-personality.md}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
-      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
-      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
-      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
-      LLM_REASONING: ${LLM_REASONING:-false}
-      # Bilder (leer = das Textmodell verarbeitet auch Bilder)
-      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
-      IMAGE_MAX_MB: ${IMAGE_MAX_MB:-5}
-      HISTORY_MAX_MESSAGES: ${HISTORY_MAX_MESSAGES:-20}
-      IMAGE_HISTORY_MAX_MESSAGES: ${IMAGE_HISTORY_MAX_MESSAGES:-4}
-      STATUS_MESSAGES_ENABLED: ${STATUS_MESSAGES_ENABLED:-true}
-      STATUS_LLM_MAX_PER_MINUTE: ${STATUS_LLM_MAX_PER_MINUTE:-2}
-      MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-4000}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # E-Mail (optional, leer = deaktiviert)
-      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
-      EMAIL_ADDRESS: ${EMAIL_ADDRESS:-}
-      EMAIL_APP_PASSWORD: ${EMAIL_APP_PASSWORD:-}
-      EMAIL_SENDER_NAME: ${EMAIL_SENDER_NAME:-}
-      EMAIL_ALLOWED_RECIPIENTS: ${EMAIL_ALLOWED_RECIPIENTS:-}
-      EMAIL_DRAFT_TTL_SECONDS: ${EMAIL_DRAFT_TTL_SECONDS:-900}
-      EMAIL_TIMEOUT_SECONDS: ${EMAIL_TIMEOUT_SECONDS:-30}
-      EMAIL_MAX_BODY_CHARS: ${EMAIL_MAX_BODY_CHARS:-6000}
-      # Aufgaben (optional, leer = deaktiviert)
-      TASK_PROVIDER: ${TASK_PROVIDER:-}
-      TODOIST_API_TOKEN: ${TODOIST_API_TOKEN:-}
-      TODOIST_TIMEOUT_SECONDS: ${TODOIST_TIMEOUT_SECONDS:-15}
-      # Erinnerungen an fällige Aufgaben (nur mit Aufgaben-Integration und ALLOWED_TELEGRAM_USER_ID)
-      REMINDERS_ENABLED: ${REMINDERS_ENABLED:-true}
-      REMINDER_POLL_SECONDS: ${REMINDER_POLL_SECONDS:-300}
-      REMINDER_DEFAULT_TIME: ${REMINDER_DEFAULT_TIME:-12:00}
-      REMINDER_EARLY_HOURS: ${REMINDER_EARLY_HOURS:-24}
-      REMINDER_URGENT_HOURS: ${REMINDER_URGENT_HOURS:-2}
-      # Websuche (optional, leer = deaktiviert)
-      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-}
-      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
-      WEB_TIMEOUT_SECONDS: ${WEB_TIMEOUT_SECONDS:-20}
-      WEB_MAX_RESULTS: ${WEB_MAX_RESULTS:-5}
-      WEB_MAX_CHARS: ${WEB_MAX_CHARS:-4000}
-      WEB_MAX_CALLS_PER_DAY: ${WEB_MAX_CALLS_PER_DAY:-30}
-      TIMEZONE: ${TIMEZONE:-Europe/Berlin}
-      # Im Container fest: liegt im persistenten Volume.
+      # Im Container fest (hat Vorrang vor der Env-Datei): liegt im persistenten Volume.
       DATABASE_PATH: /data/assistant.db
     volumes:
       - assistant-data:/data

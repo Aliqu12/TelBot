@@ -93,7 +93,7 @@ Funktionen (MVP):
 ├── personality.md            Neutrale Standard-Persönlichkeit
 ├── personalities/            Fertige Persönlichkeiten (firzana.md), Auswahl über PERSONALITY_FILE
 ├── Dockerfile
-├── compose.yaml
+├── compose.yaml              Ein Bot; alle Werte aus der Env-Datei (.env bzw. .env.<name>)
 ├── .env.example
 ├── requirements.txt          Laufzeit-Abhängigkeiten (gepinnt)
 └── requirements-dev.txt      zusätzlich pytest
@@ -226,7 +226,9 @@ docker compose logs -f
 docker compose down
 ```
 
-`compose.yaml` liest die Werte aus der `.env` im Projektordner.
+`compose.yaml` liest die Werte aus der `.env` im Projektordner (`env_file`). Die Datei selbst enthält
+keine Einstellungen; alles Konfigurierbare steht in `.env.example`. Zwei Bots parallel:
+[Zweiter Bot mit anderer Persönlichkeit](#zweiter-bot-mit-anderer-persönlichkeit).
 
 Nach der Umstellung von Groq auf OpenRouter muss die `.env` auf die neuen Variablennamen
 (`LLM_*`, `OPENROUTER_API_KEY`) umgestellt werden; die alten `GROQ_MODEL`, `GROQ_IMAGE_MODEL`
@@ -295,6 +297,9 @@ Server gebaut, dadurch passt die Architektur automatisch (amd64 oder arm64).
 
 Durch `restart: unless-stopped` startet der Bot nach einem Server-Neustart automatisch.
 
+Bei mehreren Bots (eigene Env-Datei je Bot) jedem Befehl `--env-file .env.<name>` mitgeben, z. B.
+`docker compose --env-file .env.hamid up -d --build`. Ohne dieses Flag gilt die Standard-`.env`.
+
 ### Updates
 
 ```bash
@@ -312,22 +317,22 @@ docker compose cp bot:/data/assistant.db ./assistant-backup.db
 
 Die Daten liegen im benannten Volume `telegram-assistant_assistant-data` und bleiben bei
 `docker compose down` und Updates erhalten. Nur `docker compose down -v` löscht sie.
+Bei mehreren Bots heißt das Volume `<COMPOSE_PROJECT_NAME>_assistant-data`; Backup mit
+`docker compose --env-file .env.<name> cp bot:/data/assistant.db ./assistant-<name>.db`.
 
 ## Portainer
 
 Hinweis: Die Portainer-App aus dem Umbrel App Store läuft in der Regel in einer eigenen,
 isolierten Docker-Umgebung. Container, die per SSH mit `docker compose` gestartet wurden,
-sind dort daher möglicherweise **nicht** sichtbar. Zwei Möglichkeiten:
+sind dort daher möglicherweise **nicht** sichtbar. Logs deshalb per SSH ansehen:
+`docker compose logs -f` (bei mehreren Bots mit `--env-file .env.<name>`).
 
-- **Per SSH betreiben** (oben beschrieben) und Logs mit `docker compose logs -f` ansehen.
-- **Als Portainer-Stack betreiben:** In Portainer *Stacks → Add stack → Repository* das
-  Git-Repository angeben (Compose-Pfad `compose.yaml`). Unter *Environment variables* die
-  Werte aus `.env.example` eintragen (mindestens `TELEGRAM_BOT_TOKEN`, `LLM_MODEL`, `OPENROUTER_API_KEY`,
-  `ALLOWED_TELEGRAM_USER_ID`). Portainer baut das Image dann selbst. Logs sind im
-  Container-Detail unter *Logs* sichtbar.
+`compose.yaml` liest die Werte aus einer Env-Datei neben der Compose-Datei. Ein Portainer-Stack aus dem
+Git-Repository hat diese Datei nicht (sie liegt bewusst nicht im Repository); der Betrieb als Portainer-Stack
+wird daher nicht unterstützt.
 
-Den Bot nicht gleichzeitig per SSH und als Portainer-Stack betreiben: Telegram erlaubt pro
-Token nur einen Polling-Prozess (sonst Fehler `Conflict`).
+Telegram erlaubt pro Token nur einen Polling-Prozess (sonst Fehler `Conflict`): Jeder Bot braucht einen
+eigenen Token, und derselbe Bot darf nicht doppelt laufen.
 
 ## Konfiguration
 
@@ -406,22 +411,33 @@ der Datei.
 ### Zweiter Bot mit anderer Persönlichkeit
 
 Ein zweiter Container braucht einen eigenen Bot-Token (@BotFather), ein eigenes Volume (Datenbank) und einen
-eigenen Compose-Projekt- und Containernamen. `Dockerfile` und Code bleiben gleich. Die Persönlichkeit
-wählt `PERSONALITY_FILE`; der Ordner `personalities/` ist in den Container eingebunden.
+eigenen Compose-Projekt- und Containernamen. `Dockerfile`, `compose.yaml` und Code bleiben gleich: Pro Bot gibt es
+nur eine eigene Env-Datei. Die Persönlichkeit wählt `PERSONALITY_FILE`; der Ordner `personalities/` ist in den
+Container eingebunden.
 
 1. Persönlichkeit anlegen, z. B. `personalities/layla.md` (am einfachsten als Kopie von `personalities/firzana.md`
    oder `personality.md`, dann anpassen).
-2. `compose.yaml` kopieren (z. B. nach `compose.layla.yaml`) und `name:` sowie `container_name:` ändern,
-   z. B. auf `telegram-assistant-layla`. Der Projektname bestimmt auch den Volume-Namen; bei gleichem Namen
-   würden sich beide Bots die Datenbank teilen.
-3. Eigene Env-Datei `.env.layla` mit neuem `TELEGRAM_BOT_TOKEN` und `PERSONALITY_FILE=personalities/layla.md`.
+2. Env-Datei anlegen: `.env.example` nach `.env.layla` kopieren (oder die bestehende `.env` kopieren) und setzen:
+   `TELEGRAM_BOT_TOKEN` (neuer Bot), `PERSONALITY_FILE=personalities/layla.md`,
+   `COMPOSE_PROJECT_NAME=telegram-assistant-layla` und `ENV_FILE=.env.layla`. Der Projektname bestimmt auch
+   Container- und Volume-Name; bei gleichem Namen würden sich beide Bots die Datenbank teilen.
    `OPENROUTER_API_KEY` und `LLM_MODEL` dürfen gleich bleiben. Die Datei enthält Geheimnisse und darf nicht
-   ins Repository.
-4. Starten:
+   ins Repository (`.env.*` steht in `.gitignore`).
+3. Starten (das Flag bei jedem weiteren Befehl wiederholen, auch bei `logs`, `down` und `cp`):
 
 ```powershell
-docker compose -f compose.layla.yaml --env-file .env.layla up -d --build
+docker compose --env-file .env.layla up -d --build
+docker compose --env-file .env.layla logs -f
 ```
+
+Hinweise für den Parallelbetrieb:
+
+- Teilen sich beide Bots dieselben Konten (Todoist, E-Mail) und dieselbe `ALLOWED_TELEGRAM_USER_ID`, würden beide
+  dieselbe Aufgaben-Erinnerung senden. Dann in einer Env-Datei `REMINDERS_ENABLED=false` setzen.
+- Beide Bots nutzen dasselbe Image (`telegram-assistant:<Version>`). `up -d --build` baut es neu; der jeweils
+  andere Bot läuft bis zu seinem eigenen Neustart mit dem alten Stand weiter.
+- In Werten mit `$` (z. B. Passwörtern) den Wert in einfache Anführungszeichen setzen oder `$$` schreiben,
+  sonst liest Compose es als Variable.
 
 Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eigenen `.env`.
 
