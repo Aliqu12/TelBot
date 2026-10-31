@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
+from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 from telegram import Bot, BotCommand
 from telegram.error import TelegramError
@@ -22,6 +25,7 @@ from ..llm import LLMError
 from ..mail.service import EmailService
 from ..prompts import SHUTDOWN_INSTRUCTION, STARTUP_INSTRUCTION
 from ..status_limiter import StatusRateLimiter
+from ..tasks.reminders import ReminderService, ReminderStore
 from ..tasks.service import TaskService
 from ..web.service import WebService
 from .access import AccessPolicy
@@ -86,6 +90,36 @@ async def notify_owner(
         logger.warning("Statusmeldung konnte nicht gesendet werden: %s", type(exc).__name__)
 
 
+def _build_reminders(
+    settings: Settings,
+    assistant: Assistant,
+    task_service: TaskService | None,
+    send: Callable[[str], Awaitable[None]],
+) -> ReminderService | None:
+    config = settings.reminders
+    owner_id = settings.allowed_telegram_user_id
+    if config is None or task_service is None or owner_id is None:
+        return None
+    store = ReminderStore(settings.database_path)
+    try:
+        store.initialize()
+    except (OSError, sqlite3.Error) as exc:
+        logger.error("Erinnerungen deaktiviert: Datenbank nicht nutzbar (%s).", type(exc).__name__)
+        return None
+    return ReminderService(
+        tasks=task_service,
+        assistant=assistant,
+        store=store,
+        chat_id=owner_id,
+        send=send,
+        owner_name=settings.owner_name,
+        poll_seconds=config.poll_seconds,
+        default_time=config.default_time,
+        early=timedelta(hours=config.early_hours),
+        urgent=timedelta(hours=config.urgent_hours),
+    )
+
+
 def build_application(
     settings: Settings,
     assistant: Assistant,
@@ -112,9 +146,18 @@ def build_application(
         web_enabled=web_service is not None,
     )
 
+    async def send_reminder(text: str) -> None:
+        # ``application`` wird erst unten erzeugt; der Aufruf passiert erst nach dem Start.
+        await application.bot.send_message(chat_id=settings.allowed_telegram_user_id, text=text)
+
+    reminders = _build_reminders(settings, assistant, task_service, send_reminder)
+    reminder_tasks: list[asyncio.Task] = []
+
     async def post_init(application: Application) -> None:
         await application.bot.set_my_commands(BOT_COMMANDS)
         logger.info("Bot verbunden als @%s", application.bot.username)
+        if reminders is not None:
+            reminder_tasks.append(asyncio.create_task(reminders.run(), name="task-reminders"))
         if not access.is_configured:
             logger.warning(
                 "ALLOWED_TELEGRAM_USER_ID ist nicht gesetzt: Einrichtungsmodus aktiv. "
@@ -135,6 +178,9 @@ def build_application(
 
     async def post_stop(application: Application) -> None:
         # Läuft nach dem Ende des Pollings, aber bevor der Bot-Client geschlossen wird (docker stop = SIGTERM).
+        for reminder_task in reminder_tasks:
+            reminder_task.cancel()
+        await asyncio.gather(*reminder_tasks, return_exceptions=True)
         if not settings.status_messages_enabled:
             return
         await notify_owner(

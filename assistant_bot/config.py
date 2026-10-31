@@ -6,6 +6,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -71,6 +72,16 @@ class TaskSettings:
 
 
 @dataclass(frozen=True)
+class ReminderSettings:
+    """Konfiguration der Aufgaben-Erinnerungen (benötigt die Aufgaben-Integration)."""
+
+    poll_seconds: int = 300
+    default_time: time = time(12, 0)  # Uhrzeit für Aufgaben, die nur ein Datum haben
+    early_hours: int = 24  # erste Erinnerung
+    urgent_hours: int = 2  # zweite, dringlichere Erinnerung
+
+
+@dataclass(frozen=True)
 class WebSettings:
     """Konfiguration der optionalen Websuche (z. B. Tavily)."""
 
@@ -103,6 +114,7 @@ class Settings:
     log_level: str
     email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
     tasks: TaskSettings | None = None  # None = Aufgaben-Integration deaktiviert
+    reminders: ReminderSettings | None = None  # None = keine Erinnerungen
     web: WebSettings | None = None  # None = Websuche deaktiviert
     timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
     llm_image_model: str | None = None  # None = Bilder gehen an das Textmodell (llm_model)
@@ -241,11 +253,13 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if len(owner_name) > 100:
         reader.errors.append("OWNER_NAME darf höchstens 100 Zeichen lang sein.")
 
+    allowed_user_id = reader.optional_user_id("ALLOWED_TELEGRAM_USER_ID")
+    tasks = _load_task_settings(reader)
     settings = Settings(
         telegram_bot_token=telegram_bot_token,
         llm_provider=llm_provider,
         llm_api_key=llm_api_key,
-        allowed_telegram_user_id=reader.optional_user_id("ALLOWED_TELEGRAM_USER_ID"),
+        allowed_telegram_user_id=allowed_user_id,
         owner_name=owner_name,
         llm_model=llm_model,
         llm_temperature=reader.number("LLM_TEMPERATURE", 0.7, 0.0, 2.0),
@@ -257,7 +271,10 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         max_input_chars=reader.integer("MAX_INPUT_CHARS", 4000, 1, 4096),
         log_level=log_level,
         email=_load_email_settings(reader, owner_name),
-        tasks=_load_task_settings(reader),
+        tasks=tasks,
+        reminders=_load_reminder_settings(
+            reader, tasks_enabled=tasks is not None, owner_known=allowed_user_id is not None
+        ),
         web=_load_web_settings(reader),
         timezone=_load_timezone(reader),
         llm_image_model=reader.raw("LLM_IMAGE_MODEL") or None,
@@ -376,6 +393,29 @@ def _load_task_settings(reader: _EnvReader) -> TaskSettings | None:
         provider=provider,
         api_token=api_token,
         timeout_seconds=reader.number("TODOIST_TIMEOUT_SECONDS", 15.0, 3.0, 120.0),
+    )
+
+
+def _load_reminder_settings(reader: _EnvReader, *, tasks_enabled: bool, owner_known: bool) -> ReminderSettings | None:
+    # Ohne Aufgaben-Integration oder bekannte User-ID gibt es nichts abzufragen bzw. niemanden zu erinnern.
+    if not reader.boolean("REMINDERS_ENABLED", True) or not tasks_enabled or not owner_known:
+        return None
+    default_time = ReminderSettings.default_time
+    raw_time = reader.raw("REMINDER_DEFAULT_TIME")
+    if raw_time:
+        try:
+            default_time = time.fromisoformat(raw_time)
+        except ValueError:
+            reader.errors.append(f"REMINDER_DEFAULT_TIME muss eine Uhrzeit wie 12:00 sein (erhalten: {raw_time!r}).")
+    early_hours = reader.integer("REMINDER_EARLY_HOURS", 24, 1, 168)
+    urgent_hours = reader.integer("REMINDER_URGENT_HOURS", 2, 1, 168)
+    if urgent_hours >= early_hours:
+        reader.errors.append("REMINDER_URGENT_HOURS muss kleiner sein als REMINDER_EARLY_HOURS.")
+    return ReminderSettings(
+        poll_seconds=reader.integer("REMINDER_POLL_SECONDS", 300, 60, 3600),
+        default_time=default_time,
+        early_hours=early_hours,
+        urgent_hours=urgent_hours,
     )
 
 

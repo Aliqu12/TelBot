@@ -74,6 +74,7 @@ class Task:
     duration_minutes: int | None = None
     labels: tuple[str, ...] = ()
     url: str | None = None
+    created_at: datetime | None = None  # Anlegezeitpunkt (zeitzonenbewusst), falls der Provider ihn liefert
 
 
 @dataclass(frozen=True, slots=True)

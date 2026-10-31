@@ -244,6 +244,7 @@ class TodoistTaskProvider:
                 duration_minutes=_parse_duration(duration),
                 labels=tuple(str(label) for label in item.get("labels") or ()),
                 url=TASK_URL_TEMPLATE.format(task_id=task_id),
+                created_at=_parse_timestamp(item.get("added_at")),
             )
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise TaskConnectionError("Todoist hat unerwartete Aufgabendaten geliefert.") from exc
@@ -288,6 +289,16 @@ def _from_api_priority(value: Any) -> int:
         return 5 - max(1, min(4, int(value)))
     except (TypeError, ValueError):
         return 4
+
+
+def _parse_timestamp(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _parse_duration(duration: Any) -> int | None:

@@ -192,6 +192,10 @@ class TaskService:
     async def list_projects(self) -> list[Project]:
         return await self._provider.list_projects()
 
+    async def list_open_tasks(self) -> list[Task]:
+        """Alle offenen Aufgaben ohne Filter und ohne Übersichtsnummern (für Hintergrundjobs wie Erinnerungen)."""
+        return await self._provider.list_tasks()
+
     # --- Anlegen --------------------------------------------------------------
 
     async def create_task(
