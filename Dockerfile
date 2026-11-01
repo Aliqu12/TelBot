@@ -21,11 +21,13 @@ RUN groupadd --system --gid 10001 assistant \
     && chown assistant:assistant /data
 
 COPY assistant_bot/ ./assistant_bot/
-# Neutrale Standard-Persönlichkeit und die mitgelieferten Persönlichkeiten (z. B. personalities/firzana.md).
+# Neutrale Standard-Persönlichkeit und die mitgelieferten Persönlichkeiten (z. B. custom_personalities/firzana.md).
 # Ausgewählt wird per PERSONALITY_FILE.
 COPY personality.md ./personality.md
-COPY personalities/ ./personalities/
+COPY custom_personalities/ ./custom_personalities/
 
+# Vorlagen zum Extrahieren ohne Git (siehe README): docker run --rm <image> cat /app/.env.example
+COPY .env.example compose.yaml ./
 ENV DATABASE_PATH=/data/assistant.db
 
 USER assistant

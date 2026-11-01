@@ -13,7 +13,7 @@ Funktionen (MVP):
 - Nur private Chats, nur ein freigegebener Telegram-Nutzer
 - Statusmeldungen: Beim Start schickt der Assistent dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (in der Persönlichkeit aus `PERSONALITY_FILE`, bei Firzana mit "Assalam Alaykum" und "Khuda Hafiz"/"Allah Hafiz"; Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
 - Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in der Persönlichkeit aus `PERSONALITY_FILE`, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
-- Austauschbare Persönlichkeit: Name, Biografie, Sprache, Begrüßung und Abschied stehen in einer Textdatei (`personality.md` neutral als Standard, `personalities/firzana.md` mitgeliefert), die allgemeinen Regeln im Code (siehe [Persönlichkeit](#persönlichkeit-personalitymd))
+- Austauschbare Persönlichkeit: Name, Biografie, Sprache, Begrüßung und Abschied stehen in einer Textdatei (`personality.md` neutral als Standard, `custom_personalities/firzana.md` mitgeliefert), die allgemeinen Regeln im Code (siehe [Persönlichkeit](#persönlichkeit-personalitymd))
 - Optional: E-Mail-Integration (Yahoo Mail) – lesen, suchen, Entwürfe und Antworten;
   Versand nur nach Bestätigung per Schaltfläche (siehe [E-Mail-Integration](#e-mail-integration-yahoo))
 - Optional: Aufgaben-Integration (Todoist) – Aufgaben per Nachricht anlegen, anzeigen, ändern,
@@ -91,7 +91,7 @@ Funktionen (MVP):
 │       └── message_split.py  Lange Antworten aufteilen
 ├── tests/                    pytest, ohne echte Zugangsdaten
 ├── personality.md            Neutrale Standard-Persönlichkeit
-├── personalities/            Fertige Persönlichkeiten (firzana.md), Auswahl über PERSONALITY_FILE
+├── custom_personalities/     Fertige Persönlichkeiten (firzana.md, hamid.md), Auswahl über PERSONALITY_FILE
 ├── Dockerfile
 ├── compose.yaml              Ein Bot; alle Werte aus der Env-Datei (.env bzw. .env.<name>)
 ├── .env.example
@@ -218,21 +218,25 @@ In VS Code können die Tests auch über die Test-Ansicht (Kolben-Symbol) mit pyt
 
 ## Docker lokal
 
-Mit Docker Desktop (optional):
+Mit Docker Desktop (optional) das Image aus dem Quellcode bauen und starten. In der `.env` dafür
+`BOT_IMAGE=telegram-assistant:local` setzen:
 
 ```powershell
-docker compose up -d --build
+docker build -t telegram-assistant:local .
+docker compose up -d
 docker compose logs -f
 docker compose down
 ```
 
-`compose.yaml` liest die Werte aus der `.env` im Projektordner (`env_file`). Die Datei selbst enthält
-keine Einstellungen; alles Konfigurierbare steht in `.env.example`. Zwei Bots parallel:
+`compose.yaml` baut nichts selbst, sondern startet das in `BOT_IMAGE` genannte Image (Standard: das fertige
+Image von GitHub, siehe [Variante C](#variante-c--fertiges-image-ohne-quellcode)). Es liest die Werte aus der
+`.env` im Projektordner (`env_file`). Die Datei selbst enthält keine Einstellungen; alles Konfigurierbare steht in
+`.env.example`. Zwei Bots parallel:
 [Zweiter Bot mit anderer Persönlichkeit](#zweiter-bot-mit-anderer-persönlichkeit).
 
 Nach der Umstellung von Groq auf OpenRouter muss die `.env` auf die neuen Variablennamen
 (`LLM_*`, `OPENROUTER_API_KEY`) umgestellt werden; die alten `GROQ_MODEL`, `GROQ_IMAGE_MODEL`
-usw. werden nicht mehr gelesen. Das Image muss neu gebaut werden (`--build`), weil sich die
+usw. werden nicht mehr gelesen. Das Image muss neu gebaut werden (`docker build`), weil sich die
 Abhängigkeiten geändert haben.
 
 ## Deployment auf umbrelOS
@@ -249,6 +253,9 @@ ssh umbrel@umbrel.local
 (Passwort = Umbrel-Passwort. Alternativ die IP-Adresse des Servers verwenden.)
 
 ### 2. Projekt auf den Server bringen
+
+Zwei Wege: der Quellcode wird auf dem Server gebaut (Variante A und B), oder der Server lädt nur das fertige
+Image (Variante C, ohne Quellcode, ohne Git).
 
 Das Projekt in einem eigenen Ordner ablegen, z. B. `~/telegram-assistant` –
 **nicht** innerhalb von `~/umbrel`, da dieser Ordner von umbrelOS verwaltet wird.
@@ -274,6 +281,28 @@ tar -xzf ~/telegram-assistant.tar.gz -C ~/telegram-assistant
 rm ~/telegram-assistant.tar.gz
 ```
 
+#### Variante C – fertiges Image ohne Quellcode
+
+GitHub Actions baut das Image bei jedem Push auf `dev` (`.github/workflows/docker-image.yml`) und veröffentlicht
+es als `ghcr.io/aliqu12/telbot:latest` (amd64 und arm64). Ist das Paket privat, einmal anmelden (Personal Access
+Token mit `read:packages`, Eingabe nur im Terminal):
+
+```bash
+docker login ghcr.io -u Aliqu12
+```
+
+Im Image liegen auch `compose.yaml` und `.env.example`. Auf dem Server genügt ein leerer Ordner:
+
+```bash
+mkdir -p ~/telegram-assistant && cd ~/telegram-assistant
+docker run --rm ghcr.io/aliqu12/telbot:latest cat /app/compose.yaml > compose.yaml
+docker run --rm ghcr.io/aliqu12/telbot:latest cat /app/.env.example > .env
+```
+
+Dann weiter mit Schritt 3 (`.env` ausfüllen) und Schritt 4 (Variante C). Bei einem öffentlichen Repository gehen
+auch `curl`-Downloads der beiden Dateien von GitHub. Das Image enthält alle Persönlichkeiten aus
+`custom_personalities/`; öffentlich sollte es nur sein, wenn diese Dateien es auch sein dürfen.
+
 ### 3. `.env` auf dem Server anlegen
 
 ```bash
@@ -287,27 +316,53 @@ chmod 600 .env
 
 ### 4. Starten
 
+Variante A/B (Quellcode auf dem Server): Image dort bauen und in der `.env` `BOT_IMAGE=telegram-assistant:local`
+setzen.
+
 ```bash
-docker compose up -d --build
+docker build -t telegram-assistant:local .
+docker compose up -d
 docker compose logs -f
 ```
 
-Falls Docker Rechte fehlen, die Befehle mit `sudo` ausführen. Das Image wird direkt auf dem
-Server gebaut, dadurch passt die Architektur automatisch (amd64 oder arm64).
+Variante C (fertiges Image): `BOT_IMAGE` bleibt auf dem Standard.
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs -f
+```
+
+Falls Docker Rechte fehlen, die Befehle mit `sudo` ausführen. Beim Bauen auf dem Server passt die
+Architektur automatisch (amd64 oder arm64); das fertige Image ist für beide gebaut.
 
 Durch `restart: unless-stopped` startet der Bot nach einem Server-Neustart automatisch.
 
 Bei mehreren Bots (eigene Env-Datei je Bot) jedem Befehl `--env-file .env.<name>` mitgeben, z. B.
-`docker compose --env-file .env.hamid up -d --build`. Ohne dieses Flag gilt die Standard-`.env`.
+`docker compose --env-file .env.hamid up -d`. Ohne dieses Flag gilt die Standard-`.env`.
 
 ### Updates
+
+Variante A/B:
 
 ```bash
 cd ~/telegram-assistant
 git pull                       # bzw. neue Dateien per scp kopieren (.env bleibt erhalten)
-docker compose up -d --build
+docker build -t telegram-assistant:local .
+docker compose up -d
 docker image prune -f          # optional: alte Images entfernen
 ```
+
+Variante C:
+
+```bash
+cd ~/telegram-assistant
+docker compose pull
+docker compose up -d
+docker image prune -f          # optional: alte Images entfernen
+```
+
+Bei mehreren Bots `pull` und `up -d` je Bot mit `--env-file .env.<name>` ausführen.
 
 ### Backup der Datenbank
 
@@ -394,8 +449,8 @@ Die Persönlichkeit anpassen: siehe [Persönlichkeit](#persönlichkeit-personali
 Der Systemprompt besteht aus zwei Teilen:
 
 1. **Persönlichkeit** aus einer Textdatei: Standard ist die neutrale `personality.md` im Projektordner. Fertige
-   Persönlichkeiten liegen in `personalities/` (mitgeliefert: `firzana.md`, `hamid.md`) und werden mit `PERSONALITY_FILE`
-   ausgewählt, z. B. `PERSONALITY_FILE=personalities/firzana.md`. Die Datei enthält Name,
+   Persönlichkeiten liegen in `custom_personalities/` (mitgeliefert: `firzana.md`, `hamid.md`) und werden mit `PERSONALITY_FILE`
+   ausgewählt, z. B. `PERSONALITY_FILE=custom_personalities/firzana.md`. Die Datei enthält Name,
    Biografie, Charakter, Sprache und Anrede, Begrüßung, Abschied, Schreibstil und Tonfall bei Fehlern.
 2. **Allgemeine Regeln** in `assistant_bot/prompts.py`: Aufgaben, Ehrlichkeit, Freigaben, Datenschutz sowie die
    Hinweise zu E-Mail, Aufgaben und Bildern. Sie gelten für jede Persönlichkeit.
@@ -412,13 +467,14 @@ der Datei.
 
 Ein zweiter Container braucht einen eigenen Bot-Token (@BotFather), ein eigenes Volume (Datenbank) und einen
 eigenen Compose-Projekt- und Containernamen. `Dockerfile`, `compose.yaml` und Code bleiben gleich: Pro Bot gibt es
-nur eine eigene Env-Datei. Die Persönlichkeit wählt `PERSONALITY_FILE`; der Ordner `personalities/` ist in den
-Container eingebunden.
+nur eine eigene Env-Datei. Die Persönlichkeit wählt `PERSONALITY_FILE`; der Ordner `custom_personalities/` ist im
+Image enthalten, neue Dateien darin brauchen also ein neu gebautes Image (`docker build` bzw. Push auf `dev`).
 
-1. Persönlichkeit anlegen, z. B. `personalities/layla.md` (am einfachsten als Kopie von `personalities/firzana.md`
+1. Persönlichkeit anlegen, z. B. `custom_personalities/layla.md` (am einfachsten als Kopie von
+   `custom_personalities/firzana.md`
    oder `personality.md`, dann anpassen).
 2. Env-Datei anlegen: `.env.example` nach `.env.layla` kopieren (oder die bestehende `.env` kopieren) und setzen:
-   `TELEGRAM_BOT_TOKEN` (neuer Bot), `PERSONALITY_FILE=personalities/layla.md`,
+   `TELEGRAM_BOT_TOKEN` (neuer Bot), `PERSONALITY_FILE=custom_personalities/layla.md`,
    `COMPOSE_PROJECT_NAME=telegram-assistant-layla` und `ENV_FILE=.env.layla`. Der Projektname bestimmt auch
    Container- und Volume-Name; bei gleichem Namen würden sich beide Bots die Datenbank teilen.
    `OPENROUTER_API_KEY` und `LLM_MODEL` dürfen gleich bleiben. Die Datei enthält Geheimnisse und darf nicht
@@ -426,7 +482,7 @@ Container eingebunden.
 3. Starten (das Flag bei jedem weiteren Befehl wiederholen, auch bei `logs`, `down` und `cp`):
 
 ```powershell
-docker compose --env-file .env.layla up -d --build
+docker compose --env-file .env.layla up -d
 docker compose --env-file .env.layla logs -f
 ```
 
@@ -434,12 +490,13 @@ Hinweise für den Parallelbetrieb:
 
 - Teilen sich beide Bots dieselben Konten (Todoist, E-Mail) und dieselbe `ALLOWED_TELEGRAM_USER_ID`, würden beide
   dieselbe Aufgaben-Erinnerung senden. Dann in einer Env-Datei `REMINDERS_ENABLED=false` setzen.
-- Beide Bots nutzen dasselbe Image (`telegram-assistant:<Version>`). `up -d --build` baut es neu; der jeweils
+- Beide Bots nutzen dasselbe Image (`BOT_IMAGE`). Nach `docker compose pull` (bzw. `docker build`) startet
+  `up -d` nur den Bot neu, für den es ausgeführt wird; der jeweils
   andere Bot läuft bis zu seinem eigenen Neustart mit dem alten Stand weiter.
 - In Werten mit `$` (z. B. Passwörtern) den Wert in einfache Anführungszeichen setzen oder `$$` schreiben,
   sonst liest Compose es als Variable.
 
-Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eigenen `.env`.
+Lokal ohne Docker genügt `PERSONALITY_FILE=custom_personalities/layla.md` in einer eigenen `.env`.
 
 ## Docker-Konfiguration erklärt
 
@@ -460,7 +517,11 @@ Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eig
 - **Kein Healthcheck:** Bei einem fatalen Fehler beendet sich der Prozess, und
   `restart: unless-stopped` startet ihn neu. Netzwerkunterbrechungen überbrückt
   python-telegram-bot selbst.
-- **`.dockerignore`:** `.env`, `.git`, Tests und lokale Daten gelangen nicht ins Image.
+- **`.dockerignore`:** `.env`, `.git`, Tests und lokale Daten gelangen nicht ins Image. Ausnahmen sind
+  `.env.example` und `compose.yaml`: Sie liegen als Vorlage im Image (`/app`), damit man sie ohne Git
+  extrahieren kann (Variante C). `.env`-Dateien mit Geheimnissen gelangen nie ins Image.
+- **Image statt `build:`:** `compose.yaml` startet `BOT_IMAGE` (Standard `ghcr.io/aliqu12/telbot:latest`);
+  gebaut wird per GitHub Actions oder lokal mit `docker build`.
 
 ## Sicherheit
 
@@ -478,7 +539,7 @@ Lokal ohne Docker genügt `PERSONALITY_FILE=personalities/layla.md` in einer eig
 
 ## Erweitern
 
-- **Persönlichkeit:** `personality.md` bzw. `personalities/*.md` (Auswahl über `PERSONALITY_FILE`); allgemeine Regeln in `assistant_bot/prompts.py`.
+- **Persönlichkeit:** `personality.md` bzw. `custom_personalities/*.md` (Auswahl über `PERSONALITY_FILE`); allgemeine Regeln in `assistant_bot/prompts.py`.
 - **Neue Befehle:** Methode in `BotHandlers` ergänzen, in `application.py` registrieren und
   in `BOT_COMMANDS` aufnehmen.
 - **Weitere Funktionen (Erinnerungen, Notizen, Tools, Homeserver-Integration):** in eigenen
@@ -619,11 +680,10 @@ Start mit einer klaren Meldung ab.
 ### Docker / umbrelOS / Portainer
 
 Keine zusätzlichen Pakete oder Ports nötig (nur Python-Standardbibliothek). Die
-`EMAIL_*`-Variablen in die `.env` neben `compose.yaml` eintragen (bzw. in Portainer unter
-*Environment variables*) und neu bauen/starten:
+`EMAIL_*`-Variablen in die `.env` neben `compose.yaml` eintragen und neu starten:
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 docker compose logs -f
 ```
 
@@ -855,11 +915,11 @@ Aufgabe gemeint ist.
 
 Keine zusätzlichen Ports nötig (nur ausgehendes HTTPS zu `api.todoist.com`). Die Variablen
 `TASK_PROVIDER`, `TODOIST_API_TOKEN`, optional `TODOIST_TIMEOUT_SECONDS` und `TIMEZONE`
-in die `.env` neben `compose.yaml` eintragen (bzw. in Portainer unter *Environment
-variables*) und neu bauen, da neue Python-Pakete hinzugekommen sind:
+in die `.env` neben `compose.yaml` eintragen und neu starten (mit einem Image, das die Todoist-Pakete enthält,
+also nach `docker compose pull` bzw. `docker build`):
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 docker compose logs -f
 docker compose exec bot python -m assistant_bot.tasks.check
 ```
@@ -988,7 +1048,7 @@ IMAGE_MAX_MB=5
 ```
 
 Lokal danach den Bot neu starten (`python -m assistant_bot`), in Docker
-`docker compose up -d --build`. Im Log erscheint die Zeile mit Anbieter und Modellen
+`docker compose up -d`. Im Log erscheint die Zeile mit Anbieter und Modellen
 (z. B. `Starte Assistent (Anbieter=openrouter, Modell=..., Bildmodell=..., ...)`).
 
 ### Benutzung

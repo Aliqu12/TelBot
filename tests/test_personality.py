@@ -36,7 +36,7 @@ def test_default_personality_is_neutral() -> None:
 
 
 def test_shipped_firzana_personality_has_greeting_and_farewell() -> None:
-    personality = load_personality(PROJECT_ROOT / "personalities" / "firzana.md")
+    personality = load_personality(PROJECT_ROOT / "custom_personalities" / "firzana.md")
 
     assert "Firzana" in personality and "{owner_name}" in personality
     assert "Assalam Alaykum" in personality and "Khuda Hafiz" in personality and "Allah Hafiz" in personality
@@ -45,7 +45,7 @@ def test_shipped_firzana_personality_has_greeting_and_farewell() -> None:
 
 
 def test_shipped_hamid_personality_is_informal_and_prefers_urdu() -> None:
-    personality = load_personality(PROJECT_ROOT / "personalities" / "hamid.md")
+    personality = load_personality(PROJECT_ROOT / "custom_personalities" / "hamid.md")
 
     assert "Hamid" in personality and "{owner_name}" in personality
     assert "Assalam Alaykum" in personality and "Khuda Hafiz" in personality and "Allah Hafiz" in personality

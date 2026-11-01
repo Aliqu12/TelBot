@@ -1,8 +1,10 @@
 # Persönlicher Telegram-KI-Assistent
 #
-#   Starten/aktualisieren:  docker compose up -d --build
+#   Starten/aktualisieren:  docker compose pull && docker compose up -d
 #   Logs ansehen:           docker compose logs -f
 #   Stoppen:                docker compose down
+#
+# Das Image wird von GitHub Actions gebaut (ghcr.io); auf dem Server genügen diese Datei und die Env-Dateien.
 #
 # Alle Einstellungen stehen in der Env-Datei (Vorlage: .env.example), nicht in dieser Datei.
 # Standard ist die Datei .env im selben Ordner.
@@ -11,16 +13,16 @@
 #   COMPOSE_PROJECT_NAME=hamid-afzal-assistant   (Projekt-, Container- und Volume-Name)
 #   ENV_FILE=.env.hamid                          (diese Datei selbst, siehe .env.example)
 #   TELEGRAM_BOT_TOKEN=...                       (jeder Bot braucht einen eigenen Token)
-#   PERSONALITY_FILE=personalities/hamid.md
+#   PERSONALITY_FILE=custom_personalities/hamid.md
 # und beim Aufruf angeben:
-#   docker compose --env-file .env.hamid up -d --build
+#   docker compose --env-file .env.hamid pull
+#   docker compose --env-file .env.hamid up -d
 #   docker compose --env-file .env.hamid logs -f
 name: ${COMPOSE_PROJECT_NAME:-telegram-assistant}
 
 services:
   bot:
-    build: .
-    image: telegram-assistant:0.4.0
+    image: ${BOT_IMAGE:-ghcr.io/aliqu12/telbot:latest}
     container_name: ${COMPOSE_PROJECT_NAME:-telegram-assistant}
     restart: unless-stopped
     # Pflichtwerte und Grenzen prüft der Bot beim Start und meldet Fehler gesammelt im Log.
@@ -31,8 +33,6 @@ services:
       DATABASE_PATH: /data/assistant.db
     volumes:
       - assistant-data:/data
-      # Persönlichkeiten: Änderungen und neue Dateien wirken nach einem Neustart, ohne das Image neu zu bauen.
-      - ./personalities:/app/personalities:ro
     # Keine Ports: Long Polling, IMAP/SMTP und Todoist (HTTPS) bauen nur ausgehende Verbindungen auf.
     read_only: true
     tmpfs:
