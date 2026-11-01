@@ -1,8 +1,0 @@
-python-telegram-bot==22.8
-# OpenAI-kompatibler Client für OpenRouter und Groq (bringt httpx2 mit)
-openai==3.41.0
-python-dotenv==1.2.4
-# HTTP-Client für die Todoist-API (wird auch von python-telegram-bot genutzt)
-httpx==0.28.1
-# Zeitzonendaten für zoneinfo (unter Windows und in schlanken Images nötig)
-tzdata==2026.6
