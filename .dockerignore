@@ -1,6 +1,7 @@
 # Nur das Nötigste in den Build-Kontext – vor allem keine Geheimnisse.
 .env
 .env.*
+!.env.example
 .git
 .gitignore
 .venv
@@ -15,6 +16,7 @@ data
 tests
 *.md
 !personality.md
-compose.yaml
+compose*.yaml
+!compose.yaml
 Dockerfile
 .dockerignore
