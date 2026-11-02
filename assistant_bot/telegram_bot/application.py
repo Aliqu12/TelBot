@@ -75,7 +75,9 @@ async def notify_owner(
         logger.info("Limit für KI-Statusmeldungen erreicht, sende festen Text ohne LLM-Anfrage.")
     else:
         try:
-            generated = (await asyncio.wait_for(assistant.announce(instruction), timeout)).strip()
+            generated = (
+                await asyncio.wait_for(assistant.announce(instruction, chat_id=owner_id), timeout)
+            ).strip()
             if 0 < len(generated) <= MAX_STATUS_CHARS:
                 text = generated
             else:

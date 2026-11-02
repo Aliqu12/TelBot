@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import Callable
 from datetime import datetime, tzinfo
 
@@ -31,6 +32,8 @@ TOOL_LIMIT_SITUATION = (
 # Kurze Nachrichten sollen schnell kommen; klappt die Formulierung durch das Modell nicht, gilt der feste Text.
 NOTICE_TIMEOUT_SECONDS = 10.0
 MAX_NOTICE_CHARS = 800
+# So viele der letzten Verlaufsnachrichten sehen Begrüßungen/Abschiede als Stilanker (Sprache, Anrede, Ton).
+NOTICE_STYLE_MESSAGES = 4
 # Platzhalter im gespeicherten Verlauf für Nachrichten mit Bild.
 IMAGE_HISTORY_PREFIX = "[Bild gesendet]"
 _WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
@@ -102,24 +105,42 @@ class Assistant:
         )
         return answer
 
-    async def announce(self, instruction: str) -> str:
+    async def announce(self, instruction: str, chat_id: int | None = None) -> str:
         """Lässt das Modell eine kurze, eigenständige Nachricht schreiben (z. B. Start-/Stoppmeldung).
 
-        Mit Systemprompt und aktuellem Datum, aber ohne Verlauf und ohne Werkzeuge. Es wird nichts gespeichert.
+        Mit Systemprompt und aktuellem Datum, ohne Werkzeuge. Mit ``chat_id`` gehen die letzten Nachrichten des
+        Chats als Stilanker voran, damit Sprache, Anrede und Ton zum bisherigen Gespräch passen. Es wird nichts
+        gespeichert.
         """
         system_prompt = f"{self._system_prompt}\n{self._date_context()}"
+        anchor: list[ChatMessage] = []
+        if chat_id is not None:
+            try:
+                anchor = await self._conversations.get_history(chat_id, limit=NOTICE_STYLE_MESSAGES)
+            except (sqlite3.Error, OSError) as exc:
+                logger.warning("Stilanker nicht verfügbar (%s), schreibe ohne Verlauf.", type(exc).__name__)
         return await self._chat_model.complete(
-            [ChatMessage(role="system", content=system_prompt), ChatMessage(role="user", content=instruction)]
+            [
+                ChatMessage(role="system", content=system_prompt),
+                *anchor,
+                ChatMessage(role="user", content=instruction),
+            ]
         )
 
-    async def write_notice(self, instruction: str, fallback: str, timeout: float = NOTICE_TIMEOUT_SECONDS) -> str:
+    async def write_notice(
+        self,
+        instruction: str,
+        fallback: str,
+        timeout: float = NOTICE_TIMEOUT_SECONDS,
+        chat_id: int | None = None,
+    ) -> str:
         """Lässt das Modell eine kurze Nachricht in der Persönlichkeit des Assistenten schreiben (Begrüßung, Fehlererklärung usw.).
 
         Bei Modellfehler, Zeitüberschreitung oder unbrauchbarer Antwort wird der feste ``fallback``
         zurückgegeben; diese Methode löst nie einen Modellfehler aus.
         """
         try:
-            text = await asyncio.wait_for(self.announce(instruction), timeout)
+            text = await asyncio.wait_for(self.announce(instruction, chat_id=chat_id), timeout)
         except (LLMError, TimeoutError) as exc:
             logger.warning("Nachricht nicht vom Modell formuliert (%s), nutze festen Text.", type(exc).__name__)
             return fallback
