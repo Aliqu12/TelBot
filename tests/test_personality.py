@@ -40,8 +40,16 @@ def test_shipped_firzana_personality_has_greeting_and_farewell() -> None:
 
     assert "Firzana" in personality and "{owner_name}" in personality
     assert "Assalam Alaykum" in personality and "Khuda Hafiz" in personality and "Allah Hafiz" in personality
-    assert "keine KI" in personality and "Aap" in personality
-    assert "Antworte standardmäßig auf Urdu" in personality
+    assert "NOT an AI" in personality and "Aap" in personality
+    assert "Every message you write is in Urdu" in personality
+
+
+def test_shipped_firzana_personality_has_no_contradicting_language_rules() -> None:
+    personality = load_personality(PROJECT_ROOT / "custom_personalities" / "firzana.md")
+
+    # Eine einzige Sprachregel: Urdu-Schrift, Wechsel nur auf ausdrückliche Bitte.
+    assert "Simply writing in another language is NOT such a request" in personality
+    assert "Antworte standardmäßig" not in personality and "Schreibt er auf Urdu" not in personality
 
 
 def test_shipped_hamid_personality_is_informal_and_prefers_urdu() -> None:
