@@ -1,5 +1,5 @@
 # Persönlicher Telegram-KI-Assistent
-# FORMAT_VERSION = 0.5
+# FORMAT_VERSION = 1.1
 #
 #   Starten/aktualisieren:  docker compose pull && docker compose up -d
 #   Logs ansehen:           docker compose logs -f
