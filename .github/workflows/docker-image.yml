@@ -1,33 +1,74 @@
+
 name: Docker-Image
 
-# Baut das Image und veröffentlicht es in der GitHub Container Registry (ghcr.io).
-# Der Server zieht es danach mit `docker compose pull`.
 on:
-  push:
+  pull_request:
     branches: [dev]
-  workflow_dispatch:
+    types: [closed]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
+
+concurrency:
+  group: telbot-release
+  cancel-in-progress: false
 
 jobs:
   image:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Version bestimmen
+        id: version
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+
+          if [ -z "$LAST" ]; then
+            VERSION="0.5.0"
+          else
+            IFS=. read -r MAJOR MINOR PATCH <<< "${LAST#v}"
+
+            case "$PR_TITLE" in
+              *"[major]"*) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+              *"[minor]"*) MINOR=$((MINOR+1)); PATCH=0 ;;
+              *"[patch]"*) PATCH=$((PATCH+1)) ;;
+              *) echo "PR-Titel braucht [major], [minor] oder [patch]"; exit 1 ;;
+            esac
+
+            VERSION="$MAJOR.$MINOR.$PATCH"
+          fi
+
+          echo "number=$VERSION" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
+            ghcr.io/aliqu12/telbot:${{ steps.version.outputs.number }}
             ghcr.io/aliqu12/telbot:latest
-            ghcr.io/aliqu12/telbot:${{ github.sha }}
+
+      - name: Git-Tag erstellen
+        run: |
+          TAG="v${{ steps.version.outputs.number }}"
+          git tag "$TAG"
+          git push origin "$TAG"
