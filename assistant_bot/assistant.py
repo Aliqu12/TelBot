@@ -133,6 +133,7 @@ class Assistant:
         fallback: str,
         timeout: float = NOTICE_TIMEOUT_SECONDS,
         chat_id: int | None = None,
+        max_chars: int = MAX_NOTICE_CHARS,
     ) -> str:
         """Lässt das Modell eine kurze Nachricht in der Persönlichkeit des Assistenten schreiben (Begrüßung, Fehlererklärung usw.).
 
@@ -145,7 +146,7 @@ class Assistant:
             logger.warning("Nachricht nicht vom Modell formuliert (%s), nutze festen Text.", type(exc).__name__)
             return fallback
         text = text.strip()
-        if not 0 < len(text) <= MAX_NOTICE_CHARS:
+        if not 0 < len(text) <= max_chars:
             logger.warning("Nachricht des Modells unbrauchbar (%d Zeichen), nutze festen Text.", len(text))
             return fallback
         return text

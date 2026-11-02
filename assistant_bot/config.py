@@ -82,6 +82,14 @@ class ReminderSettings:
 
 
 @dataclass(frozen=True)
+class WeeklyReviewSettings:
+    """Konfiguration des wöchentlichen Rückblicks (benötigt die Aufgaben-Integration)."""
+
+    weekday: int = 4  # 0 = Montag ... 6 = Sonntag; Standard Freitag
+    send_time: time = time(13, 0)
+
+
+@dataclass(frozen=True)
 class WebSettings:
     """Konfiguration der optionalen Websuche (z. B. Tavily)."""
 
@@ -115,6 +123,7 @@ class Settings:
     email: EmailSettings | None = None  # None = E-Mail-Integration deaktiviert
     tasks: TaskSettings | None = None  # None = Aufgaben-Integration deaktiviert
     reminders: ReminderSettings | None = None  # None = keine Erinnerungen
+    weekly_review: WeeklyReviewSettings | None = None  # None = kein Wochenrückblick
     web: WebSettings | None = None  # None = Websuche deaktiviert
     timezone: str = DEFAULT_TIMEZONE  # IANA-Name, z. B. "Europe/Berlin"
     llm_image_model: str | None = None  # None = Bilder gehen an das Textmodell (llm_model)
@@ -275,6 +284,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         reminders=_load_reminder_settings(
             reader, tasks_enabled=tasks is not None, owner_known=allowed_user_id is not None
         ),
+        weekly_review=_load_weekly_review_settings(
+            reader, tasks_enabled=tasks is not None, owner_known=allowed_user_id is not None
+        ),
         web=_load_web_settings(reader),
         timezone=_load_timezone(reader),
         llm_image_model=reader.raw("LLM_IMAGE_MODEL") or None,
@@ -417,6 +429,49 @@ def _load_reminder_settings(reader: _EnvReader, *, tasks_enabled: bool, owner_kn
         early_hours=early_hours,
         urgent_hours=urgent_hours,
     )
+
+
+_WEEKDAY_NAMES = {
+    name: index
+    for index, names in enumerate(
+        (
+            ("montag", "monday", "mo", "mon"),
+            ("dienstag", "tuesday", "di", "tue"),
+            ("mittwoch", "wednesday", "mi", "wed"),
+            ("donnerstag", "thursday", "do", "thu"),
+            ("freitag", "friday", "fr", "fri"),
+            ("samstag", "saturday", "sa", "sat"),
+            ("sonntag", "sunday", "so", "sun"),
+        )
+    )
+    for name in names
+}
+
+
+def _load_weekly_review_settings(
+    reader: _EnvReader, *, tasks_enabled: bool, owner_known: bool
+) -> WeeklyReviewSettings | None:
+    # Wie bei den Erinnerungen: ohne Aufgaben-Integration oder bekannte User-ID gibt es nichts zu senden.
+    if not reader.boolean("WEEKLY_REVIEW_ENABLED", True) or not tasks_enabled or not owner_known:
+        return None
+    defaults = WeeklyReviewSettings()
+    weekday = defaults.weekday
+    raw_day = reader.raw("WEEKLY_REVIEW_DAY").lower()
+    if raw_day:
+        if raw_day in _WEEKDAY_NAMES:
+            weekday = _WEEKDAY_NAMES[raw_day]
+        else:
+            reader.errors.append(
+                f"WEEKLY_REVIEW_DAY muss ein Wochentag wie freitag oder friday sein (erhalten: {raw_day!r})."
+            )
+    send_time = defaults.send_time
+    raw_time = reader.raw("WEEKLY_REVIEW_TIME")
+    if raw_time:
+        try:
+            send_time = time.fromisoformat(raw_time)
+        except ValueError:
+            reader.errors.append(f"WEEKLY_REVIEW_TIME muss eine Uhrzeit wie 13:00 sein (erhalten: {raw_time!r}).")
+    return WeeklyReviewSettings(weekday=weekday, send_time=send_time)
 
 
 def _load_web_settings(reader: _EnvReader) -> WebSettings | None:

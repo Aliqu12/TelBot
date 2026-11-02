@@ -434,6 +434,9 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `REMINDER_DEFAULT_TIME` | nein | `12:00` | Uhrzeit für Aufgaben, die nur ein Datum haben (`HH:MM`) |
 | `REMINDER_EARLY_HOURS` | nein | `24` | Erste Erinnerung so viele Stunden vor dem Termin (1 bis 168) |
 | `REMINDER_URGENT_HOURS` | nein | `2` | Zweite, dringlichere Erinnerung (muss kleiner als `REMINDER_EARLY_HOURS` sein) |
+| `WEEKLY_REVIEW_ENABLED` | nein | `true` | Wöchentlicher Rückblick (nur mit Aufgaben-Integration und `ALLOWED_TELEGRAM_USER_ID`) |
+| `WEEKLY_REVIEW_DAY` | nein | `freitag` | Wochentag des Rückblicks (deutsch oder englisch, z. B. `freitag`, `friday`, `fr`) |
+| `WEEKLY_REVIEW_TIME` | nein | `13:00` | Uhrzeit des Rückblicks (`HH:MM`, in `TIMEZONE`) |
 | `WEB_SEARCH_PROVIDER` | nein | leer | `tavily` aktiviert die Websuche. Leer = deaktiviert |
 | `TAVILY_API_KEY` | bei Websuche | – | API-Key von app.tavily.com |
 | `WEB_TIMEOUT_SECONDS` | nein | `20` | Zeitlimit für Such- und Leseanfragen (3 bis 120) |
@@ -489,7 +492,8 @@ docker compose --env-file .env.layla logs -f
 Hinweise für den Parallelbetrieb:
 
 - Teilen sich beide Bots dieselben Konten (Todoist, E-Mail) und dieselbe `ALLOWED_TELEGRAM_USER_ID`, würden beide
-  dieselbe Aufgaben-Erinnerung senden. Dann in einer Env-Datei `REMINDERS_ENABLED=false` setzen.
+  dieselbe Aufgaben-Erinnerung senden. Dann in einer Env-Datei `REMINDERS_ENABLED=false` und
+  `WEEKLY_REVIEW_ENABLED=false` setzen (sonst kommt auch der Wochenrückblick doppelt).
 - Beide Bots nutzen dasselbe Image (`BOT_IMAGE`). Nach `docker compose pull` (bzw. `docker build`) startet
   `up -d` nur den Bot neu, für den es ausgeführt wird; der jeweils
   andere Bot läuft bis zu seinem eigenen Neustart mit dem alten Stand weiter.
@@ -787,6 +791,9 @@ Aufbau analog zur E-Mail-Integration:
   `unarchive_project`, `delete_project` (bereitet nur vor), `list_sections`, `create_section`,
   `list_labels`, `create_label`, `rename_label`, `delete_label` (bereitet nur vor)
 - `assistant_bot/tasks/check.py` – Verbindungstest ohne Telegram
+- `assistant_bot/tasks/reminders.py` – Erinnerungen an fällige Aufgaben
+- `assistant_bot/tasks/weekly_review.py` – wöchentlicher Rückblick (Termine, Aufteilung der Aufgaben,
+  Speicher, Versand)
 - `assistant_bot/telegram_bot/task_confirmation.py` – Schaltflächen "Löschen"/"Behalten"
 
 Wichtige Entscheidungen:
@@ -887,6 +894,29 @@ Details:
 - Eine Aufgabe, die erst nach dem Zeitpunkt der 24-h-Erinnerung angelegt wurde, bekommt diese Stufe nicht.
 - Die Erinnerung steht im Gesprächsverlauf, du kannst direkt antworten (z. B. "verschieb das auf morgen").
 - Abschalten: `REMINDERS_ENABLED=false`.
+
+### Wochenrückblick
+
+Mit Aufgaben-Integration und gesetzter `ALLOWED_TELEGRAM_USER_ID` schickt der Bot einmal pro Woche einen
+Rückblick, standardmäßig **freitags um 13:00 Uhr** (`WEEKLY_REVIEW_DAY`, `WEEKLY_REVIEW_TIME`, in `TIMEZONE`):
+
+- **Rückblick:** die in der Woche erledigten Aufgaben, vom vorigen Termin (Freitag 13:00) bis zum aktuellen.
+- **Ausblick:** die anstehenden Aufgaben bis zum nächsten Termin (Freitag 13:00), dazu überfällige Aufgaben.
+- Die Nachricht schreibt das Sprachmodell in der Persönlichkeit des Bots, wie eine Büroassistenz mit eigenem
+  Kommentar (z. B. "nächste Woche ist wenig los, nur ..."). Bei Ausfall des Modells gilt ein kurzer fester Text.
+
+Details:
+
+- Aufgaben nur mit Datum zählen nach dem Tag: Was am Tag des nächsten Rückblicks fällig ist, gehört zu diesem
+  nächsten Rückblick. Aufgaben mit Uhrzeit zählen nach dem genauen Zeitpunkt.
+- Der gesendete Termin steht in der Datenbank (`weekly_reviews`): kein doppelter Rückblick, auch nicht nach
+  einem Neustart. War der Bot zum Termin offline, wird der Rückblick bis 12 Stunden danach nachgeholt, danach
+  entfällt er für diese Woche. Scheitert der Versand (z. B. Todoist nicht erreichbar), wird es bis dahin erneut versucht.
+- Der Rückblick steht im Gesprächsverlauf, du kannst direkt darauf antworten (z. B. "verschieb die überfälligen
+  auf Montag").
+- Zum Ausprobieren `WEEKLY_REVIEW_DAY` und `WEEKLY_REVIEW_TIME` auf heute und eine Uhrzeit in den nächsten
+  Minuten setzen und den Bot neu starten.
+- Abschalten: `WEEKLY_REVIEW_ENABLED=false`. Unabhängig von `REMINDERS_ENABLED`.
 
 ### Lokal starten (Windows)
 

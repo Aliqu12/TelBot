@@ -115,3 +115,48 @@ def test_invalid_reminder_settings_are_reported(
         load_settings({**reminder_env, **override})
 
     assert fragment in str(excinfo.value)
+
+
+# --- Wochenrückblick ------------------------------------------------------------
+
+
+def test_weekly_review_defaults_to_friday_13_00_when_tasks_and_owner_are_configured(reminder_env: dict[str, str]) -> None:
+    review = load_settings(reminder_env).weekly_review
+
+    assert review is not None
+    assert (review.weekday, review.send_time) == (4, time(13, 0))
+
+
+@pytest.mark.parametrize(("name", "weekday"), [("Sonntag", 6), ("monday", 0), (" Fr ", 4), ("DONNERSTAG", 3)])
+def test_weekly_review_day_and_time_are_parsed(reminder_env: dict[str, str], name: str, weekday: int) -> None:
+    review = load_settings({**reminder_env, "WEEKLY_REVIEW_DAY": name, "WEEKLY_REVIEW_TIME": "18:30"}).weekly_review
+
+    assert review is not None
+    assert (review.weekday, review.send_time) == (weekday, time(18, 30))
+
+
+def test_weekly_review_is_off_without_tasks_owner_or_when_disabled(
+    valid_env: dict[str, str], reminder_env: dict[str, str]
+) -> None:
+    assert load_settings({**valid_env, "ALLOWED_TELEGRAM_USER_ID": "42"}).weekly_review is None
+    assert load_settings({**reminder_env, "ALLOWED_TELEGRAM_USER_ID": ""}).weekly_review is None
+    assert load_settings({**reminder_env, "WEEKLY_REVIEW_ENABLED": "false"}).weekly_review is None
+    # unabhängig von den Erinnerungen
+    only_review = load_settings({**reminder_env, "REMINDERS_ENABLED": "false"})
+    assert only_review.reminders is None and only_review.weekly_review is not None
+
+
+@pytest.mark.parametrize(
+    ("override", "fragment"),
+    [
+        ({"WEEKLY_REVIEW_DAY": "werktag"}, "WEEKLY_REVIEW_DAY"),
+        ({"WEEKLY_REVIEW_TIME": "nachmittags"}, "WEEKLY_REVIEW_TIME"),
+    ],
+)
+def test_invalid_weekly_review_settings_are_reported(
+    reminder_env: dict[str, str], override: dict[str, str], fragment: str
+) -> None:
+    with pytest.raises(ConfigError) as excinfo:
+        load_settings({**reminder_env, **override})
+
+    assert fragment in str(excinfo.value)

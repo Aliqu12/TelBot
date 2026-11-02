@@ -27,6 +27,7 @@ from ..prompts import SHUTDOWN_INSTRUCTION, STARTUP_INSTRUCTION
 from ..status_limiter import StatusRateLimiter
 from ..tasks.reminders import ReminderService, ReminderStore
 from ..tasks.service import TaskService
+from ..tasks.weekly_review import WeeklyReviewService, WeeklyReviewStore
 from ..web.service import WebService
 from .access import AccessPolicy
 from .email_confirmation import CALLBACK_PATTERN, EmailConfirmationHandlers
@@ -122,8 +123,35 @@ def _build_reminders(
     )
 
 
-def build_application(
+def _build_weekly_review(
     settings: Settings,
+    assistant: Assistant,
+    task_service: TaskService | None,
+    send: Callable[[str], Awaitable[None]],
+) -> WeeklyReviewService | None:
+    config = settings.weekly_review
+    owner_id = settings.allowed_telegram_user_id
+    if config is None or task_service is None or owner_id is None:
+        return None
+    store = WeeklyReviewStore(settings.database_path)
+    try:
+        store.initialize()
+    except (OSError, sqlite3.Error) as exc:
+        logger.error("Wochenrückblick deaktiviert: Datenbank nicht nutzbar (%s).", type(exc).__name__)
+        return None
+    return WeeklyReviewService(
+        tasks=task_service,
+        assistant=assistant,
+        store=store,
+        chat_id=owner_id,
+        send=send,
+        owner_name=settings.owner_name,
+        weekday=config.weekday,
+        send_time=config.send_time,
+    )
+
+
+def build_application(    settings: Settings,
     assistant: Assistant,
     email_service: EmailService | None = None,
     task_service: TaskService | None = None,
@@ -153,6 +181,7 @@ def build_application(
         await application.bot.send_message(chat_id=settings.allowed_telegram_user_id, text=text)
 
     reminders = _build_reminders(settings, assistant, task_service, send_reminder)
+    weekly_review = _build_weekly_review(settings, assistant, task_service, send_reminder)
     reminder_tasks: list[asyncio.Task] = []
 
     async def post_init(application: Application) -> None:
@@ -160,6 +189,8 @@ def build_application(
         logger.info("Bot verbunden als @%s", application.bot.username)
         if reminders is not None:
             reminder_tasks.append(asyncio.create_task(reminders.run(), name="task-reminders"))
+        if weekly_review is not None:
+            reminder_tasks.append(asyncio.create_task(weekly_review.run(), name="weekly-review"))
         if not access.is_configured:
             logger.warning(
                 "ALLOWED_TELEGRAM_USER_ID ist nicht gesetzt: Einrichtungsmodus aktiv. "
