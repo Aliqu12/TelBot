@@ -157,6 +157,7 @@ class BotHandlers:
             START_COMMAND_INSTRUCTION.format(owner_name=self._owner_name),
             f"Hallo {self._owner_name}! Schreib mir einfach eine Nachricht. "
             "Mit /help siehst du, was ich kann.",
+            chat_id=user.id,
         )
         await _reply(message, greeting)
 

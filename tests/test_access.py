@@ -59,7 +59,7 @@ def make_handlers(allowed_user_id: int | None = OWNER_ID, max_input_chars: int =
     assistant.reset = AsyncMock()
     # Standardmäßig liefert das "Modell" den festen Ersatztext (wie bei einem Modellausfall).
     assistant.explain_problem = AsyncMock(side_effect=lambda situation, fallback: fallback)
-    assistant.write_notice = AsyncMock(side_effect=lambda instruction, fallback: fallback)
+    assistant.write_notice = AsyncMock(side_effect=lambda instruction, fallback, **_: fallback)
     handlers = BotHandlers(
         assistant=assistant,
         access=AccessPolicy(allowed_user_id),

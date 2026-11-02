@@ -11,7 +11,7 @@ Funktionen (MVP):
 - Persistenter, begrenzter Gesprächsverlauf pro Chat
 - Befehle `/start`, `/help`, `/reset`, `/whoami`
 - Nur private Chats, nur ein freigegebener Telegram-Nutzer
-- Statusmeldungen: Beim Start schickt der Assistent dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (in der Persönlichkeit aus `PERSONALITY_FILE`, bei Firzana mit "Assalam Alaykum" und "Khuda Hafiz"/"Allah Hafiz"; Anweisungen in `prompts.py`), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
+- Statusmeldungen: Beim Start schickt der Assistent dem freigegebenen Nutzer eine Begrüßung, beim geordneten Beenden (`docker stop`, Neustart) eine kurze Abwesenheitsmeldung. Beide Texte formuliert das Sprachmodell jedes Mal neu (in der Persönlichkeit aus `PERSONALITY_FILE`, bei Firzana mit "Assalam Alaykum" und "Khuda Hafiz"/"Allah Hafiz"; Anweisungen in `prompts.py`; die letzten Chatnachrichten dienen dabei als Stilanker für Sprache, Anrede und Ton), aber höchstens `STATUS_LLM_MAX_PER_MINUTE` (Standard 2) Mal pro Minute, auch über Neustarts hinweg. Darüber hinaus, bei Fehlern oder wenn das Modell nicht rechtzeitig antwortet (10 s beim Start, 5 s beim Beenden), wird ein fester Text gesendet. Mit `STATUS_MESSAGES_ENABLED=false` entfallen beide Meldungen. Bei einem Absturz oder `kill -9` entfällt die Abwesenheitsmeldung.
 - Menschliche Fehlermeldungen: Technische Probleme (Anfragelimit, zu großes Bild, Zeitüberschreitung, leeres Guthaben, unbekannter Befehl usw.) werden nicht mit festen Texten gemeldet. Das Sprachmodell erklärt sie in der Persönlichkeit aus `PERSONALITY_FILE`, ohne Fehlercodes (Anweisung `ERROR_INSTRUCTION` in `prompts.py`). Nur wenn das Modell dabei selbst nicht rechtzeitig (10 s) antwortet, gilt ein fester Ersatztext. Die Details stehen weiterhin im Log.
 - Austauschbare Persönlichkeit: Name, Biografie, Sprache, Begrüßung und Abschied stehen in einer Textdatei (`personality.md` neutral als Standard, `custom_personalities/firzana.md` mitgeliefert), die allgemeinen Regeln im Code (siehe [Persönlichkeit](#persönlichkeit-personalitymd))
 - Optional: E-Mail-Integration (Yahoo Mail) – lesen, suchen, Entwürfe und Antworten;
@@ -434,6 +434,9 @@ Start zu einer gesammelten Fehlermeldung, Geheimnisse werden dabei nicht ausgege
 | `REMINDER_DEFAULT_TIME` | nein | `12:00` | Uhrzeit für Aufgaben, die nur ein Datum haben (`HH:MM`) |
 | `REMINDER_EARLY_HOURS` | nein | `24` | Erste Erinnerung so viele Stunden vor dem Termin (1 bis 168) |
 | `REMINDER_URGENT_HOURS` | nein | `2` | Zweite, dringlichere Erinnerung (muss kleiner als `REMINDER_EARLY_HOURS` sein) |
+| `WEEKLY_REVIEW_ENABLED` | nein | `true` | Wöchentlicher Rückblick (nur mit Aufgaben-Integration und `ALLOWED_TELEGRAM_USER_ID`) |
+| `WEEKLY_REVIEW_DAY` | nein | `freitag` | Wochentag des Rückblicks (deutsch oder englisch, z. B. `freitag`, `friday`, `fr`) |
+| `WEEKLY_REVIEW_TIME` | nein | `13:00` | Uhrzeit des Rückblicks (`HH:MM`, in `TIMEZONE`) |
 | `WEB_SEARCH_PROVIDER` | nein | leer | `tavily` aktiviert die Websuche. Leer = deaktiviert |
 | `TAVILY_API_KEY` | bei Websuche | – | API-Key von app.tavily.com |
 | `WEB_TIMEOUT_SECONDS` | nein | `20` | Zeitlimit für Such- und Leseanfragen (3 bis 120) |
@@ -489,7 +492,8 @@ docker compose --env-file .env.layla logs -f
 Hinweise für den Parallelbetrieb:
 
 - Teilen sich beide Bots dieselben Konten (Todoist, E-Mail) und dieselbe `ALLOWED_TELEGRAM_USER_ID`, würden beide
-  dieselbe Aufgaben-Erinnerung senden. Dann in einer Env-Datei `REMINDERS_ENABLED=false` setzen.
+  dieselbe Aufgaben-Erinnerung senden. Dann in einer Env-Datei `REMINDERS_ENABLED=false` und
+  `WEEKLY_REVIEW_ENABLED=false` setzen (sonst kommt auch der Wochenrückblick doppelt).
 - Beide Bots nutzen dasselbe Image (`BOT_IMAGE`). Nach `docker compose pull` (bzw. `docker build`) startet
   `up -d` nur den Bot neu, für den es ausgeführt wird; der jeweils
   andere Bot läuft bis zu seinem eigenen Neustart mit dem alten Stand weiter.
@@ -745,6 +749,16 @@ Funktionen (per normaler Telegram-Nachricht):
   Datum oder Wiederholung entfernen)
 - Aufgaben als erledigt markieren (wiederkehrende Aufgaben springen auf den nächsten Termin)
 - Aufgaben löschen – **nur** nach Tipp auf die Schaltfläche "Löschen"
+- Aufgaben in ein anderes Projekt oder einen Abschnitt verschieben (nicht zu verwechseln mit dem
+  Termin ändern)
+- Projekte anlegen (auch als Unterprojekt), umbenennen, archivieren, wiederherstellen und löschen –
+  Löschen **nur** nach Bestätigung, mit Hinweis auf die enthaltenen offenen Aufgaben; der Eingang
+  ist geschützt. Archivieren ist die sichere Alternative
+- Abschnitte in einem Projekt anzeigen und anlegen
+- Labels anzeigen, anlegen, umbenennen und löschen (Löschen nur nach Bestätigung; das Label wird
+  von allen Aufgaben entfernt)
+- Erledigte Aufgaben eines Zeitraums abrufen (z. B. "Was habe ich letzte Woche geschafft?"),
+  höchstens 3 Monate – Grundlage für einen späteren Wochenrückblick
 
 ### Architektur
 
@@ -772,8 +786,14 @@ Aufbau analog zur E-Mail-Integration:
   Zuordnung von "die Aufgabe Waschmaschine" zu einer Aufgabe, Schutz vor Duplikaten,
   Löschfreigabe
 - `assistant_bot/tasks/tools.py` – Werkzeuge für das Sprachmodell: `list_tasks`, `create_task`,
-  `update_task`, `complete_task`, `delete_task` (bereitet nur vor), `list_projects`
+  `update_task`, `complete_task`, `delete_task` (bereitet nur vor), `move_task`,
+  `list_completed_tasks`, `list_projects`, `create_project`, `rename_project`, `archive_project`,
+  `unarchive_project`, `delete_project` (bereitet nur vor), `list_sections`, `create_section`,
+  `list_labels`, `create_label`, `rename_label`, `delete_label` (bereitet nur vor)
 - `assistant_bot/tasks/check.py` – Verbindungstest ohne Telegram
+- `assistant_bot/tasks/reminders.py` – Erinnerungen an fällige Aufgaben
+- `assistant_bot/tasks/weekly_review.py` – wöchentlicher Rückblick (Termine, Aufteilung der Aufgaben,
+  Speicher, Versand)
 - `assistant_bot/telegram_bot/task_confirmation.py` – Schaltflächen "Löschen"/"Behalten"
 
 Wichtige Entscheidungen:
@@ -794,9 +814,18 @@ Wichtige Entscheidungen:
   2 Minuten nur einmal angelegt – auch wenn eine Nachricht doppelt ankommt oder zwei
   Anfragen gleichzeitig laufen. Nach einem Zeitlimit beim Anlegen wird nicht automatisch
   wiederholt, weil Todoist die Aufgabe eventuell schon gespeichert hat.
-- **Löschen nur mit Bestätigung:** Das Werkzeug `delete_task` legt nur eine Löschanfrage an
+- **Löschen nur mit Bestätigung:** Die Werkzeuge `delete_task`, `delete_project` und
+  `delete_label` legen nur eine Löschanfrage an
   (zufällige ID, 5 Minuten gültig). Gelöscht wird ausschließlich über den
   Schaltflächen-Handler nach Zugriffsprüfung, auch bei doppeltem Klick genau einmal.
+- **Projekte, Abschnitte und Labels** werden über ihren Namen angesprochen (exakter Treffer vor
+  Teiltreffer, bei Mehrdeutigkeit wird nachgefragt). Doppelte Namen werden abgelehnt. Beim
+  Verschieben in einen Abschnitt wird der Abschnitt im gewählten Projekt gesucht.
+- **Erledigte Aufgaben:** Der Zeitraum gilt in deiner Zeitzone (Beginn inklusive, Ende
+  exklusiv). Wiederkehrende Aufgaben erscheinen je Erledigung einmal. Die Liste hat keine
+  Nummern, es lässt sich also nichts versehentlich darauf anwenden.
+- **Tarif-Grenzen:** Todoist begrenzt je nach Tarif u. a. Projekte, Abschnitte und Labels. Ein
+  abgelehnter Aufruf (HTTP 403) ergibt eine verständliche Meldung.
 - **Wiederholungen nicht versehentlich zerstören:** Wird bei einer wiederkehrenden Aufgabe nur
   ein neues Datum gesetzt, fragt der Bot nach, ob die Wiederholung entfallen soll.
 - **Todoist-Inhalte gelten als nicht vertrauenswürdig:** Sie werden markiert an das Modell
@@ -865,6 +894,29 @@ Details:
 - Eine Aufgabe, die erst nach dem Zeitpunkt der 24-h-Erinnerung angelegt wurde, bekommt diese Stufe nicht.
 - Die Erinnerung steht im Gesprächsverlauf, du kannst direkt antworten (z. B. "verschieb das auf morgen").
 - Abschalten: `REMINDERS_ENABLED=false`.
+
+### Wochenrückblick
+
+Mit Aufgaben-Integration und gesetzter `ALLOWED_TELEGRAM_USER_ID` schickt der Bot einmal pro Woche einen
+Rückblick, standardmäßig **freitags um 13:00 Uhr** (`WEEKLY_REVIEW_DAY`, `WEEKLY_REVIEW_TIME`, in `TIMEZONE`):
+
+- **Rückblick:** die in der Woche erledigten Aufgaben, vom vorigen Termin (Freitag 13:00) bis zum aktuellen.
+- **Ausblick:** die anstehenden Aufgaben bis zum nächsten Termin (Freitag 13:00), dazu überfällige Aufgaben.
+- Die Nachricht schreibt das Sprachmodell in der Persönlichkeit des Bots, wie eine Büroassistenz mit eigenem
+  Kommentar (z. B. "nächste Woche ist wenig los, nur ..."). Bei Ausfall des Modells gilt ein kurzer fester Text.
+
+Details:
+
+- Aufgaben nur mit Datum zählen nach dem Tag: Was am Tag des nächsten Rückblicks fällig ist, gehört zu diesem
+  nächsten Rückblick. Aufgaben mit Uhrzeit zählen nach dem genauen Zeitpunkt.
+- Der gesendete Termin steht in der Datenbank (`weekly_reviews`): kein doppelter Rückblick, auch nicht nach
+  einem Neustart. War der Bot zum Termin offline, wird der Rückblick bis 12 Stunden danach nachgeholt, danach
+  entfällt er für diese Woche. Scheitert der Versand (z. B. Todoist nicht erreichbar), wird es bis dahin erneut versucht.
+- Der Rückblick steht im Gesprächsverlauf, du kannst direkt darauf antworten (z. B. "verschieb die überfälligen
+  auf Montag").
+- Zum Ausprobieren `WEEKLY_REVIEW_DAY` und `WEEKLY_REVIEW_TIME` auf heute und eine Uhrzeit in den nächsten
+  Minuten setzen und den Bot neu starten.
+- Abschalten: `WEEKLY_REVIEW_ENABLED=false`. Unabhängig von `REMINDERS_ENABLED`.
 
 ### Lokal starten (Windows)
 

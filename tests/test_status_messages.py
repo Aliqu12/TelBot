@@ -52,7 +52,7 @@ def test_model_text_is_sent_to_owner() -> None:
 
     send(bot, assistant)
 
-    assistant.announce.assert_awaited_once_with("Anweisung")
+    assistant.announce.assert_awaited_once_with("Anweisung", chat_id=OWNER)
     bot.send_message.assert_awaited_once_with(chat_id=OWNER, text="Guten Morgen Ali, ich bin startklar!")
 
 
@@ -74,7 +74,7 @@ def test_fallback_text_is_used_when_model_fails_or_answer_is_unusable(assistant:
 
 
 def test_fallback_text_is_used_on_timeout() -> None:
-    async def slow(_: str) -> str:
+    async def slow(_: str, **__: Any) -> str:
         await asyncio.sleep(5)
         return "zu spät"
 
@@ -116,11 +116,41 @@ def test_announce_uses_persona_without_history_tools_or_storage(tmp_path: Path) 
     assert len(asyncio.run(conversations.get_history(OWNER))) == 2  # unverändert
 
 
+def test_announce_with_chat_id_adds_recent_messages_as_style_anchor(tmp_path: Path) -> None:
+    conversations = ConversationService(tmp_path / "test.db", 20)
+    conversations.initialize()
+    for i in range(1, 5):
+        asyncio.run(conversations.add_exchange(OWNER, f"Frage {i}", f"Antwort {i}"))
+    model = RecordingModel("Hallo")
+    assistant = Assistant(model, conversations, "SYSTEM")  # type: ignore[arg-type]
+
+    asyncio.run(assistant.announce("Begrüße Ali", chat_id=OWNER))
+
+    (messages,) = model.calls
+    assert [(m.role, m.content) for m in messages[1:]] == [
+        ("user", "Frage 3"),
+        ("assistant", "Antwort 3"),
+        ("user", "Frage 4"),
+        ("assistant", "Antwort 4"),
+        ("user", "Begrüße Ali"),
+    ]
+    assert len(asyncio.run(conversations.get_history(OWNER))) == 8  # nichts gespeichert
+
+
+def test_announce_without_usable_history_still_works(tmp_path: Path) -> None:
+    conversations = ConversationService(tmp_path / "test.db", 20)  # nicht initialisiert: keine Tabelle
+    model = RecordingModel("Hallo")
+    assistant = Assistant(model, conversations, "SYSTEM")  # type: ignore[arg-type]
+
+    assert asyncio.run(assistant.write_notice("Begrüße Ali", "Fester Text", chat_id=OWNER)) == "Hallo"
+    assert [m.role for m in model.calls[0]] == ["system", "user"]
+
+
 def test_instructions_name_the_owner_and_describe_the_event() -> None:
     start = STARTUP_INSTRUCTION.format(owner_name="Ali")
     stop = SHUTDOWN_INSTRUCTION.format(owner_name="Ali")
 
-    assert "Ali" in start and "startklar" in start
+    assert "Ali" in start and "Begrüßung" in start and "nicht in der Sprache" in start
     assert "Ali" in stop and "kurz" in stop and "erfinde keine" in stop.lower()
 
 

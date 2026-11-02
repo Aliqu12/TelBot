@@ -18,6 +18,7 @@ from assistant_bot.tasks.models import (
     TaskAuthenticationError,
     TaskChanges,
     TaskConnectionError,
+    TaskError,
     TaskNotFoundError,
     TaskRateLimitError,
     TaskTimeoutError,
@@ -341,3 +342,139 @@ def test_factory_creates_todoist_provider() -> None:
     provider = create_task_provider(TaskSettings(provider="todoist", api_token=TOKEN), BERLIN)
     assert isinstance(provider, TodoistTaskProvider)
     run(provider.aclose())
+
+
+# --- Projekte, Abschnitte, Labels, Verschieben, erledigte Aufgaben ------------------
+
+
+def test_project_calls() -> None:
+    recorder = Recorder(
+        httpx.Response(200, json={"id": "p1", "name": "Garten", "parent_id": "p0", "inbox_project": False}),
+        httpx.Response(200, json={"id": "p1", "name": "Beet"}),
+        httpx.Response(200, json={"id": "p1", "name": "Beet", "is_archived": True}),
+        httpx.Response(200, json={"id": "p1", "name": "Beet"}),
+        httpx.Response(204),
+    )
+    provider, _ = make_provider(recorder)
+
+    created = run(provider.create_project("Garten", "p0"))
+    renamed = run(provider.rename_project("p1", "Beet"))
+    run(provider.archive_project("p1"))
+    run(provider.unarchive_project("p1"))
+    run(provider.delete_project("p1"))
+
+    assert (created.project_id, created.parent_id, renamed.name) == ("p1", "p0", "Beet")
+    assert [(r.method, r.url.path) for r in recorder.requests] == [
+        ("POST", "/api/v1/projects"),
+        ("POST", "/api/v1/projects/p1"),
+        ("POST", "/api/v1/projects/p1/archive"),
+        ("POST", "/api/v1/projects/p1/unarchive"),
+        ("DELETE", "/api/v1/projects/p1"),
+    ]
+    assert json.loads(recorder.requests[0].content) == {"name": "Garten", "parent_id": "p0"}
+    assert json.loads(recorder.requests[1].content) == {"name": "Beet"}
+
+
+def test_archived_projects_are_marked() -> None:
+    recorder = Recorder(httpx.Response(200, json={"results": [{"id": "p9", "name": "Alt"}], "next_cursor": None}))
+    provider, _ = make_provider(recorder)
+
+    projects = run(provider.list_archived_projects())
+
+    assert recorder.requests[0].url.path == "/api/v1/projects/archived"
+    assert [(p.project_id, p.is_archived) for p in projects] == [("p9", True)]
+
+
+def test_sections_and_labels() -> None:
+    recorder = Recorder(
+        httpx.Response(200, json={"results": [{"id": "s1", "name": "Küche", "project_id": "p1"}], "next_cursor": None}),
+        httpx.Response(200, json={"id": "s2", "name": "Bad", "project_id": "p1"}),
+        httpx.Response(200, json={"results": [{"id": "l1", "name": "privat"}], "next_cursor": None}),
+        httpx.Response(200, json={"id": "l2", "name": "Neu"}),
+        httpx.Response(200, json={"id": "l2", "name": "Alt"}),
+        httpx.Response(204),
+    )
+    provider, _ = make_provider(recorder)
+
+    sections = run(provider.list_sections("p1"))
+    created = run(provider.create_section("p1", "Bad"))
+    labels = run(provider.list_labels())
+    run(provider.create_label("Neu"))
+    renamed = run(provider.rename_label("l2", "Alt"))
+    run(provider.delete_label("l2"))
+
+    assert [(s.section_id, s.project_id, s.name) for s in sections] == [("s1", "p1", "Küche")]
+    assert recorder.requests[0].url.params["project_id"] == "p1"
+    assert created.section_id == "s2" and json.loads(recorder.requests[1].content) == {"name": "Bad", "project_id": "p1"}
+    assert [label.name for label in labels] == ["privat"] and renamed.name == "Alt"
+    assert [(r.method, r.url.path) for r in recorder.requests[3:]] == [
+        ("POST", "/api/v1/labels"),
+        ("POST", "/api/v1/labels/l2"),
+        ("DELETE", "/api/v1/labels/l2"),
+    ]
+
+
+def test_move_task_sends_exactly_one_target() -> None:
+    recorder = Recorder(
+        httpx.Response(200, json=task_json(project_id="p2")),
+        httpx.Response(200, json=task_json(project_id="p2", section_id="s1")),
+    )
+    provider, _ = make_provider(recorder)
+
+    to_project = run(provider.move_task("t1", project_id="p2"))
+    to_section = run(provider.move_task("t1", section_id="s1"))
+
+    assert recorder.requests[0].url.path == "/api/v1/tasks/t1/move"
+    assert json.loads(recorder.requests[0].content) == {"project_id": "p2"}
+    assert json.loads(recorder.requests[1].content) == {"section_id": "s1"}
+    assert to_project.section_id is None and to_section.section_id == "s1"
+    with pytest.raises(TaskValidationError):
+        run(provider.move_task("t1"))
+    with pytest.raises(TaskValidationError):
+        run(provider.move_task("t1", project_id="p2", section_id="s1"))
+    with pytest.raises(TaskValidationError):
+        run(provider.move_task("../x", project_id="p2"))
+    assert len(recorder.requests) == 2
+
+
+def test_completed_tasks_use_items_key_utc_range_and_keep_recurring_repeats() -> None:
+    page1 = {
+        "items": [
+            task_json("a", completed_at="2026-10-26T13:30:00Z"),
+            task_json("r", completed_at="2026-10-24T08:00:00Z"),
+        ],
+        "next_cursor": "abc",
+    }
+    page2 = {"items": [task_json("r", completed_at="2026-10-25T08:00:00Z")], "next_cursor": None}
+    recorder = Recorder(httpx.Response(200, json=page1), httpx.Response(200, json=page2))
+    provider, _ = make_provider(recorder)
+
+    tasks = run(
+        provider.list_completed_tasks(
+            datetime(2026, 10, 23, 13, 0, tzinfo=BERLIN), datetime(2026, 10, 30, 13, 0, tzinfo=BERLIN), "p1"
+        )
+    )
+
+    params = recorder.requests[0].url.params
+    assert recorder.requests[0].url.path == "/api/v1/tasks/completed/by_completion_date"
+    assert (params["since"], params["until"], params["project_id"]) == (
+        "2026-10-23T11:00:00Z",
+        "2026-10-30T12:00:00Z",
+        "p1",
+    )
+    assert recorder.requests[1].url.params["cursor"] == "abc"
+    assert [(t.task_id, t.completed_at) for t in tasks] == [
+        ("a", datetime(2026, 10, 26, 14, 30, tzinfo=BERLIN)),
+        ("r", datetime(2026, 10, 24, 10, 0, tzinfo=BERLIN)),
+        ("r", datetime(2026, 10, 25, 9, 0, tzinfo=BERLIN)),
+    ]
+
+
+def test_plan_limit_and_missing_entry_messages() -> None:
+    recorder = Recorder(httpx.Response(403, json={"error": "limit"}), httpx.Response(404, json={}))
+    provider, _ = make_provider(recorder)
+
+    with pytest.raises(TaskError, match="Limit"):
+        run(provider.create_label("X"))
+    with pytest.raises(TaskNotFoundError):
+        run(provider.delete_project("p1"))

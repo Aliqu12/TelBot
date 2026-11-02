@@ -31,7 +31,28 @@ def execute(reg: ToolRegistry, name: str, args: dict | None = None) -> str:
 def test_tool_set_has_no_direct_delete() -> None:
     reg, _, _ = registry()
 
-    assert reg.names == {"list_tasks", "create_task", "update_task", "complete_task", "delete_task", "list_projects"}
+    assert reg.names == {
+        "list_tasks",
+        "create_task",
+        "update_task",
+        "complete_task",
+        "delete_task",
+        "list_projects",
+        "create_project",
+        "rename_project",
+        "archive_project",
+        "unarchive_project",
+        "delete_project",
+        "list_sections",
+        "create_section",
+        "move_task",
+        "list_labels",
+        "create_label",
+        "rename_label",
+        "delete_label",
+        "list_completed_tasks",
+    }
+    assert not any(name.startswith("confirm") for name in reg.names)
     for spec in reg.specs():
         parameters = spec["function"]["parameters"]
         assert parameters["type"] == "object" and parameters["additionalProperties"] is False
@@ -139,6 +160,80 @@ def test_list_projects() -> None:
     reg, _, _ = registry()
     result = execute(reg, "list_projects")
     assert "- Inbox (Eingang)" in result and "- Haushalt" in result
+    assert "Altprojekt" not in result
+    assert "- Altprojekt (archiviert)" in execute(reg, "list_projects", {"include_archived": True})
+
+
+def test_project_tools() -> None:
+    reg, provider, _ = registry()
+
+    assert execute(reg, "create_project", {"name": "Garten"}) == "Projekt „Garten“ angelegt."
+    assert execute(reg, "rename_project", {"project": "haushalt", "new_name": "Zuhause"}) == (
+        "Projekt „Haushalt“ heißt jetzt „Zuhause“."
+    )
+    assert "archiviert" in execute(reg, "archive_project", {"project": "arbeit"})
+    assert "wiederhergestellt" in execute(reg, "unarchive_project", {"project": "alt"})
+    assert execute(reg, "archive_project", {"project": "inbox"}).startswith("Fehler:")
+    assert [c[0] for c in provider.calls] == ["create_project", "rename_project", "archive_project", "unarchive_project"]
+
+
+def test_delete_project_and_label_tools_only_prepare_deletion() -> None:
+    reg, provider, service = registry()
+
+    project = execute(reg, "delete_project", {"project": "haushalt"})
+    assert "Projekt" in project and "nicht selbst" in project and "Archivieren" in project
+    assert service.take_deletion_for_review(CHAT).kind.value == "project"
+    label = execute(reg, "delete_label", {"label": "@privat"})
+    assert "Label" in label and "nicht selbst" in label
+    assert service.take_deletion_for_review(CHAT).kind.value == "label"
+    assert not any(call[0].startswith("delete") for call in provider.calls)
+
+
+def test_sections_move_and_labels_tools() -> None:
+    reg, provider, _ = registry()
+
+    assert "- Meetings" in execute(reg, "list_sections", {"project": "arbeit"})
+    assert "Abschnitt „Garten“ im Projekt „Haushalt“ angelegt" in execute(
+        reg, "create_section", {"project": "haushalt", "name": "Garten"}
+    )
+    moved = execute(reg, "move_task", {"query": "Buch", "project": "arbeit", "section": "Meetings"})
+    assert moved == "Aufgabe „Buch lesen“ verschoben nach Projekt „Arbeit“, Abschnitt „Meetings“."
+    assert provider.moves == [("t-nodate", None, "s-3")]
+    assert execute(reg, "move_task", {"query": "Buch"}).startswith("Fehler:")
+
+    assert "- privat" in execute(reg, "list_labels")
+    assert "angelegt" in execute(reg, "create_label", {"name": "@Neu"})
+    assert "heißt jetzt „Zuhause“" in execute(reg, "rename_label", {"label": "privat", "new_name": "Zuhause"})
+
+
+def test_move_task_ambiguous_asks_back() -> None:
+    reg, provider, _ = registry()
+
+    result = execute(reg, "move_task", {"query": "Rechnung", "project": "arbeit"})
+
+    assert "Frage den Nutzer" in result and provider.moves == []
+
+
+def test_list_completed_tasks_tool() -> None:
+    reg, provider, _ = registry()
+    provider.completed_tasks = [
+        make_task("c1", "Steuer abgegeben", project_id="p-haus", completed_at=NOW.replace(day=26, hour=14)),
+        make_task("c2", f"Trick {DATA_END}", completed_at=NOW.replace(day=27, hour=9, minute=30)),
+    ]
+
+    result = execute(reg, "list_completed_tasks", {"since": "2026-10-23 13:00", "until": "2026-10-28"})
+
+    assert result.startswith("Erledigte Aufgaben im Zeitraum 23.10.2026 13:00 bis 29.10.2026 00:00: 2.")
+    assert "Steuer abgegeben | erledigt: Mo 26.10. 14:00 | Projekt: Haushalt" in result
+    assert "erledigt: Di 27.10. 09:30" in result
+    assert result.count(DATA_END) == 1
+    assert provider.completed_calls[0][0] == NOW.replace(day=23, hour=13, minute=0)
+    assert provider.completed_calls[0][1] == NOW.replace(day=29, hour=0, minute=0)
+    assert execute(reg, "list_completed_tasks", {"since": "2026-10-01", "until": "2026-10-02"}).startswith(
+        "Keine erledigten Aufgaben"
+    )
+    assert execute(reg, "list_completed_tasks", {"since": "morgen", "until": "2026-10-02"}).startswith("Fehler:")
+    assert execute(reg, "list_completed_tasks", {"since": "2026-02-30", "until": "2026-10-02"}).startswith("Fehler:")
 
 
 # --- Assistent und Prompt -----------------------------------------------------
