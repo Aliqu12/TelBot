@@ -8,8 +8,11 @@
 - Schutz vor Duplikaten beim Anlegen (gleiche Aufgabe kurz hintereinander).
 - Schutz wiederkehrender Aufgaben: Ein festes Datum beendet die Wiederholung
   nur, wenn das ausdrücklich gewünscht ist.
-- Löschen nur nach Bestätigung per Telegram-Button (``confirm_deletion``);
-  das Sprachmodell kann Löschungen lediglich vorbereiten.
+- Löschen (Aufgaben, Projekte, Labels) nur nach Bestätigung per Telegram-Button
+  (``confirm_deletion``); das Sprachmodell kann Löschungen lediglich vorbereiten.
+- Projekte, Abschnitte und Labels werden über ihren Namen angesprochen
+  (eindeutiger Treffer nötig, sonst Nachfrage). Duplikate werden abgelehnt.
+- Erledigte Aufgaben eines Zeitraums (Basis für Rückblicke).
 
 Zustände (Übersichten, Duplikat-Schutz, Löschanfragen) liegen bewusst nur im
 Arbeitsspeicher.
@@ -25,11 +28,14 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from datetime import time as dtime
 from enum import Enum
+from typing import TypeVar
 
 from .models import (
     DueInput,
+    Label,
     NewTask,
     Project,
+    Section,
     Task,
     TaskAmbiguousError,
     TaskChanges,
@@ -53,9 +59,14 @@ MAX_QUERY_CHARS = 200
 MAX_LABELS = 10
 MAX_LABEL_CHARS = 60
 MAX_DURATION_MINUTES = 1440
+MAX_NAME_CHARS = 120
+MAX_COMPLETED_RESULTS = 100
+MAX_COMPLETED_RANGE = timedelta(days=92)  # Todoist liefert erledigte Aufgaben für höchstens 3 Monate
 LISTING_TTL_SECONDS = 3600
 DELETION_TTL_SECONDS = 300
 CREATE_DEDUPE_SECONDS = 120
+
+_T = TypeVar("_T")
 
 
 class DeletionStatus(Enum):
@@ -64,12 +75,23 @@ class DeletionStatus(Enum):
     DONE = "done"
 
 
+class DeletionKind(Enum):
+    TASK = "task"
+    PROJECT = "project"
+    LABEL = "label"
+
+
 @dataclass(frozen=True, slots=True)
 class PendingDeletion:
     deletion_id: str
-    task: Task
+    kind: DeletionKind
+    target_id: str
+    name: str
     status: DeletionStatus
     expires_at: float  # Zeitpunkt der Uhr des Services (monoton)
+    task: Task | None = None  # nur bei Aufgaben
+    open_task_count: int | None = None  # Projekte: offene Aufgaben (inkl. Unterprojekte); Labels: Aufgaben mit Label
+    subproject_count: int = 0  # nur bei Projekten
 
 
 class DeletionError(TaskError):
@@ -105,6 +127,20 @@ class CreateResult:
 class CompleteResult:
     task: Task
     next_due: TaskDue | None = None  # bei wiederkehrenden Aufgaben: nächster Termin
+
+
+@dataclass(frozen=True, slots=True)
+class MoveResult:
+    task: Task
+    project_name: str
+    section_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedListing:
+    tasks: list[Task]  # nach Erledigungszeitpunkt sortiert, auf ``limit`` begrenzt
+    total: int  # Treffer vor der Begrenzung
+    project_names: dict[str, str]  # Projekt-ID -> Name (nur aktive Projekte)
 
 
 @dataclass
@@ -189,8 +225,11 @@ class TaskService:
         self._remember_listing(chat_id, shown)
         return TaskListing(tasks=shown, total=len(matching), overdue_count=overdue)
 
-    async def list_projects(self) -> list[Project]:
-        return await self._provider.list_projects()
+    async def list_projects(self, *, include_archived: bool = False) -> list[Project]:
+        projects = await self._provider.list_projects()
+        if include_archived:
+            projects = projects + await self._provider.list_archived_projects()
+        return projects
 
     async def list_open_tasks(self) -> list[Task]:
         """Alle offenen Aufgaben ohne Filter und ohne Übersichtsnummern (für Hintergrundjobs wie Erinnerungen)."""
@@ -321,19 +360,208 @@ class TaskService:
                 next_due = None
         return CompleteResult(task=task, next_due=next_due)
 
+    async def list_completed_tasks(
+        self,
+        *,
+        since: datetime,
+        until: datetime,
+        project: str | None = None,
+        limit: int = 50,
+    ) -> CompletedListing:
+        """Erledigte Aufgaben mit Erledigungszeitpunkt in [since, until). Vergibt keine Aktionsnummern."""
+        since, until = self._aware(since), self._aware(until)
+        if until <= since:
+            raise TaskValidationError("Das Ende des Zeitraums muss nach dem Anfang liegen.")
+        if until - since > MAX_COMPLETED_RANGE:
+            raise TaskValidationError("Der Zeitraum darf höchstens drei Monate umfassen.")
+        projects = await self._provider.list_projects()
+        project_id = _pick_by_name(projects, project, "Projekt", "Projekte").project_id if project else None
+        tasks = await self._provider.list_completed_tasks(since, until, project_id)
+        tasks = sorted(tasks, key=lambda t: t.completed_at or since)
+        shown = tasks[: max(1, min(MAX_COMPLETED_RESULTS, limit))]
+        return CompletedListing(
+            tasks=shown,
+            total=len(tasks),
+            project_names={p.project_id: p.name for p in projects},
+        )
+
+    # --- Verschieben ----------------------------------------------------------
+
+    async def move_task(
+        self,
+        chat_id: int,
+        *,
+        number: int | None = None,
+        query: str | None = None,
+        project: str | None = None,
+        section: str | None = None,
+    ) -> MoveResult:
+        """Verschiebt eine Aufgabe in ein anderes Projekt und/oder einen Abschnitt (keine Terminverschiebung)."""
+        if not (project and project.strip()) and not (section and section.strip()):
+            raise TaskValidationError("Bitte ein Zielprojekt und/oder einen Zielabschnitt angeben.")
+        task = await self._resolve(chat_id, number, query)
+        projects = await self._provider.list_projects()
+        names = {p.project_id: p.name for p in projects}
+        target_project = _pick_by_name(projects, project, "Projekt", "Projekte") if project else None
+
+        if section and section.strip():
+            sections = await self._provider.list_sections(target_project.project_id if target_project else None)
+            chosen = _pick_by_name(
+                sections,
+                section,
+                "Abschnitt",
+                "Abschnitte",
+                display=lambda s: f"{s.name} (Projekt {names.get(s.project_id, '?')})",
+            )
+            if task.section_id == chosen.section_id:
+                raise TaskValidationError(f"Die Aufgabe liegt bereits im Abschnitt „{chosen.name}“.")
+            moved = await self._provider.move_task(task.task_id, section_id=chosen.section_id)
+            logger.info("Aufgabe in Abschnitt verschoben (id=%s).", task.task_id)
+            return MoveResult(task=moved, project_name=names.get(chosen.project_id, "?"), section_name=chosen.name)
+
+        assert target_project is not None
+        if task.project_id == target_project.project_id and task.section_id is None:
+            raise TaskValidationError(f"Die Aufgabe liegt bereits im Projekt „{target_project.name}“.")
+        moved = await self._provider.move_task(task.task_id, project_id=target_project.project_id)
+        logger.info("Aufgabe in Projekt verschoben (id=%s).", task.task_id)
+        return MoveResult(task=moved, project_name=target_project.name)
+
+    # --- Projekte -------------------------------------------------------------
+
+    async def create_project(self, name: str, parent: str | None = None) -> Project:
+        name = _clean_name(name, "Projektname")
+        projects = await self._provider.list_projects()
+        parent_id = _pick_by_name(projects, parent, "Projekt", "Projekte").project_id if parent else None
+        if any(_norm(p.name) == _norm(name) and p.parent_id == parent_id for p in projects):
+            raise TaskValidationError(f"Ein Projekt „{name}“ gibt es an dieser Stelle schon.")
+        project = await self._provider.create_project(name, parent_id)
+        logger.info("Projekt angelegt (id=%s).", project.project_id)
+        return project
+
+    async def rename_project(self, project: str, new_name: str) -> tuple[Project, Project]:
+        """Benennt ein Projekt um. Liefert (vorher, nachher)."""
+        new_name = _clean_name(new_name, "Projektname")
+        projects = await self._provider.list_projects()
+        current = _pick_by_name(projects, project, "Projekt", "Projekte")
+        _reject_inbox(current, "umbenannt")
+        if any(
+            p.project_id != current.project_id and _norm(p.name) == _norm(new_name) and p.parent_id == current.parent_id
+            for p in projects
+        ):
+            raise TaskValidationError(f"Ein Projekt „{new_name}“ gibt es an dieser Stelle schon.")
+        renamed = await self._provider.rename_project(current.project_id, new_name)
+        logger.info("Projekt umbenannt (id=%s).", current.project_id)
+        return current, renamed
+
+    async def archive_project(self, project: str) -> Project:
+        current = _pick_by_name(await self._provider.list_projects(), project, "Projekt", "Projekte")
+        _reject_inbox(current, "archiviert")
+        await self._provider.archive_project(current.project_id)
+        logger.info("Projekt archiviert (id=%s).", current.project_id)
+        return current
+
+    async def unarchive_project(self, project: str) -> Project:
+        archived = await self._provider.list_archived_projects()
+        current = _pick_by_name(archived, project, "Archiviertes Projekt", "archivierte Projekte")
+        await self._provider.unarchive_project(current.project_id)
+        logger.info("Projekt wiederhergestellt (id=%s).", current.project_id)
+        return current
+
+    # --- Abschnitte -----------------------------------------------------------
+
+    async def list_sections(self, project: str) -> tuple[Project, list[Section]]:
+        found = _pick_by_name(await self._provider.list_projects(), project, "Projekt", "Projekte")
+        return found, await self._provider.list_sections(found.project_id)
+
+    async def create_section(self, project: str, name: str) -> tuple[Project, Section]:
+        name = _clean_name(name, "Abschnittsname")
+        found = _pick_by_name(await self._provider.list_projects(), project, "Projekt", "Projekte")
+        existing = await self._provider.list_sections(found.project_id)
+        if any(_norm(s.name) == _norm(name) for s in existing):
+            raise TaskValidationError(f"Im Projekt „{found.name}“ gibt es den Abschnitt „{name}“ schon.")
+        section = await self._provider.create_section(found.project_id, name)
+        logger.info("Abschnitt angelegt (id=%s).", section.section_id)
+        return found, section
+
+    # --- Labels ---------------------------------------------------------------
+
+    async def list_labels(self) -> list[Label]:
+        return await self._provider.list_labels()
+
+    async def create_label(self, name: str) -> Label:
+        name = _clean_label_name(name)
+        if any(_norm(label.name) == _norm(name) for label in await self._provider.list_labels()):
+            raise TaskValidationError(f"Das Label „{name}“ gibt es schon.")
+        label = await self._provider.create_label(name)
+        logger.info("Label angelegt (id=%s).", label.label_id)
+        return label
+
+    async def rename_label(self, label: str, new_name: str) -> tuple[Label, Label]:
+        """Benennt ein Label um. Liefert (vorher, nachher)."""
+        new_name = _clean_label_name(new_name)
+        labels = await self._provider.list_labels()
+        current = _pick_by_name(labels, _strip_at(label), "Label", "Labels")
+        if any(item.label_id != current.label_id and _norm(item.name) == _norm(new_name) for item in labels):
+            raise TaskValidationError(f"Das Label „{new_name}“ gibt es schon.")
+        renamed = await self._provider.rename_label(current.label_id, new_name)
+        logger.info("Label umbenannt (id=%s).", current.label_id)
+        return current, renamed
+
     # --- Löschen (nur mit Bestätigung) ---------------------------------------
 
     async def request_deletion(self, chat_id: int, *, number: int | None = None, query: str | None = None) -> PendingDeletion:
-        """Bereitet das Löschen vor. Gelöscht wird erst nach ``confirm_deletion`` (Nutzer-Klick)."""
+        """Bereitet das Löschen einer Aufgabe vor. Gelöscht wird erst nach ``confirm_deletion`` (Nutzer-Klick)."""
         task = await self._resolve(chat_id, number, query)
+        return self._store_deletion(
+            chat_id, kind=DeletionKind.TASK, target_id=task.task_id, name=task.content, task=task
+        )
+
+    async def request_project_deletion(self, chat_id: int, project: str) -> PendingDeletion:
+        """Bereitet das Löschen eines Projekts samt Unterprojekten und Aufgaben vor (nur mit Bestätigung)."""
+        projects = await self._provider.list_projects()
+        current = _pick_by_name(projects, project, "Projekt", "Projekte")
+        _reject_inbox(current, "gelöscht")
+        tree = {current.project_id}
+        grew = True
+        while grew:  # Unterprojekte (beliebig tief) einsammeln
+            grew = False
+            for p in projects:
+                if p.parent_id in tree and p.project_id not in tree:
+                    tree.add(p.project_id)
+                    grew = True
+        tasks = await self._provider.list_tasks()
+        open_count = sum(1 for t in tasks if t.project_id in tree)
+        return self._store_deletion(
+            chat_id,
+            kind=DeletionKind.PROJECT,
+            target_id=current.project_id,
+            name=current.name,
+            open_task_count=open_count,
+            subproject_count=len(tree) - 1,
+        )
+
+    async def request_label_deletion(self, chat_id: int, label: str) -> PendingDeletion:
+        """Bereitet das Löschen eines Labels vor (es wird von allen Aufgaben entfernt; nur mit Bestätigung)."""
+        current = _pick_by_name(await self._provider.list_labels(), _strip_at(label), "Label", "Labels")
+        tasks = await self._provider.list_tasks()
+        used = sum(1 for t in tasks if any(_norm(name) == _norm(current.name) for name in t.labels))
+        return self._store_deletion(
+            chat_id,
+            kind=DeletionKind.LABEL,
+            target_id=current.label_id,
+            name=current.name,
+            open_task_count=used,
+        )
+
+    def _store_deletion(self, chat_id: int, **fields) -> PendingDeletion:
         current = self._deletions.get(chat_id)
         if current is not None and current.deletion.status is DeletionStatus.DELETING:
-            raise TaskValidationError("Es wird gerade eine andere Aufgabe gelöscht. Bitte kurz warten.")
+            raise TaskValidationError("Es wird gerade etwas gelöscht. Bitte kurz warten.")
         deletion = PendingDeletion(
             deletion_id=secrets.token_hex(6),
-            task=task,
             status=DeletionStatus.PENDING,
             expires_at=self._clock() + DELETION_TTL_SECONDS,
+            **fields,
         )
         self._deletions[chat_id] = _DeletionRecord(deletion=deletion, needs_review=True)
         return deletion
@@ -346,16 +574,17 @@ class TaskService:
         record.needs_review = False
         return record.deletion
 
-    async def confirm_deletion(self, chat_id: int, deletion_id: str) -> Task:
+    async def confirm_deletion(self, chat_id: int, deletion_id: str) -> PendingDeletion:
         """Löscht – nur nach ausdrücklicher Nutzeraktion (Telegram-Button), niemals durch das LLM."""
         record = self._deletions.get(chat_id)
         if record is None or record.deletion.deletion_id != deletion_id:
             raise DeletionNotFoundError("Diese Löschanfrage ist nicht mehr gültig.")
         deletion = record.deletion
+        this = _THIS[deletion.kind]
         if deletion.status is DeletionStatus.DONE:
-            raise DeletionAlreadyDoneError("Diese Aufgabe wurde bereits gelöscht.")
+            raise DeletionAlreadyDoneError(f"{this} wurde bereits gelöscht.")
         if deletion.status is DeletionStatus.DELETING:
-            raise DeletionAlreadyDoneError("Diese Aufgabe wird gerade gelöscht.")
+            raise DeletionAlreadyDoneError(f"{this} wird gerade gelöscht.")
         if self._clock() > deletion.expires_at:
             del self._deletions[chat_id]
             raise DeletionExpiredError("Die Löschanfrage ist abgelaufen. Bitte erneut anfordern.")
@@ -363,22 +592,28 @@ class TaskService:
         # Status vor dem ersten await setzen: Doppelklicks löschen nicht zweimal.
         record.deletion = replace(deletion, status=DeletionStatus.DELETING)
         try:
-            await self._provider.delete_task(deletion.task.task_id)
+            if deletion.kind is DeletionKind.TASK:
+                await self._provider.delete_task(deletion.target_id)
+            elif deletion.kind is DeletionKind.PROJECT:
+                await self._provider.delete_project(deletion.target_id)
+            else:
+                await self._provider.delete_label(deletion.target_id)
         except BaseException:
             self._deletions.pop(chat_id, None)
             raise
         record.deletion = replace(deletion, status=DeletionStatus.DONE)
-        logger.info("Aufgabe gelöscht (id=%s).", deletion.task.task_id)
-        return deletion.task
+        logger.info("Gelöscht: %s (id=%s).", deletion.kind.value, deletion.target_id)
+        return deletion
 
-    def cancel_deletion(self, chat_id: int, deletion_id: str) -> bool:
+    def cancel_deletion(self, chat_id: int, deletion_id: str) -> PendingDeletion | None:
+        """Verwirft eine offene Löschanfrage. Liefert sie zurück, oder ``None`` wenn keine offene existiert."""
         record = self._deletions.get(chat_id)
         if record is None or record.deletion.deletion_id != deletion_id:
-            return False
+            return None
         if record.deletion.status is not DeletionStatus.PENDING:
-            return False
+            return None
         del self._deletions[chat_id]
-        return True
+        return record.deletion
 
     # --- Intern ---------------------------------------------------------------
 
@@ -456,19 +691,11 @@ class TaskService:
         if day < self.now().date():
             raise TaskValidationError(f"Der {day.strftime('%d.%m.%Y')} liegt in der Vergangenheit. Bitte Datum prüfen.")
 
+    def _aware(self, value: datetime) -> datetime:
+        return value.replace(tzinfo=self._timezone) if value.tzinfo is None else value.astimezone(self._timezone)
+
     async def _find_project(self, name: str) -> Project:
-        wanted = " ".join(name.casefold().split())
-        if not wanted:
-            raise TaskValidationError("Der Projektname ist leer.")
-        projects = await self._provider.list_projects()
-        exact = [p for p in projects if " ".join(p.name.casefold().split()) == wanted]
-        partial = exact or [p for p in projects if wanted in p.name.casefold()]
-        if len(partial) == 1:
-            return partial[0]
-        names = ", ".join(p.name for p in (partial or projects)[:MAX_CANDIDATES])
-        if partial:
-            raise TaskValidationError(f"Mehrere Projekte passen zu „{name}“: {names}. Bitte genauer angeben.")
-        raise TaskNotFoundError(f"Projekt „{name}“ nicht gefunden. Vorhanden: {names or 'keine'}.")
+        return _pick_by_name(await self._provider.list_projects(), name, "Projekt", "Projekte")
 
     async def _resolve(self, chat_id: int, number: int | None, query: str | None) -> Task:
         if number is not None:
@@ -594,6 +821,65 @@ def _clean_labels(values: Sequence[str] | None) -> tuple[str, ...]:
     if len(result) > MAX_LABELS:
         raise TaskValidationError(f"Höchstens {MAX_LABELS} Labels sind erlaubt.")
     return tuple(result)
+
+
+def _norm(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _strip_at(value: str) -> str:
+    return value.strip().lstrip("@")
+
+
+def _clean_name(value: str | None, what: str) -> str:
+    value = " ".join((value or "").split())
+    if not value:
+        raise TaskValidationError(f"Der {what} ist leer.")
+    if len(value) > MAX_NAME_CHARS or not value.isprintable():
+        raise TaskValidationError(f"Der {what} ist ungültig oder zu lang (höchstens {MAX_NAME_CHARS} Zeichen).")
+    return value
+
+
+def _clean_label_name(value: str | None) -> str:
+    name = _clean_name(_strip_at(value or ""), "Labelname")
+    if len(name) > MAX_LABEL_CHARS:
+        raise TaskValidationError(f"Der Labelname ist zu lang (höchstens {MAX_LABEL_CHARS} Zeichen).")
+    return name
+
+
+def _reject_inbox(project: Project, verb: str) -> None:
+    if project.is_inbox:
+        raise TaskValidationError(f"Der Eingang kann nicht {verb} werden.")
+
+
+def _pick_by_name(
+    items: Sequence[_T],
+    name: str | None,
+    singular: str,
+    plural: str,
+    *,
+    display: Callable[[_T], str] | None = None,
+) -> _T:
+    """Findet genau einen Eintrag per Name (exakt, sonst Teiltreffer); bei Mehrdeutigkeit wird nachgefragt."""
+    wanted = _norm(name or "")
+    if not wanted:
+        raise TaskValidationError(f"Die Angabe zum Eintrag ({singular}) ist leer.")
+    show = display or (lambda item: item.name)  # type: ignore[attr-defined]
+    exact = [i for i in items if _norm(i.name) == wanted]  # type: ignore[attr-defined]
+    found = exact or [i for i in items if wanted in i.name.casefold()]  # type: ignore[attr-defined]
+    if len(found) == 1:
+        return found[0]
+    names = ", ".join(show(i) for i in (found or items)[:MAX_CANDIDATES])
+    if found:
+        raise TaskValidationError(f"Mehrere {plural} passen zu „{name}“: {names}. Bitte genauer angeben.")
+    raise TaskNotFoundError(f"{singular} „{name}“ nicht gefunden. Vorhanden: {names or 'keine'}.")
+
+
+_THIS = {
+    DeletionKind.TASK: "Diese Aufgabe",
+    DeletionKind.PROJECT: "Dieses Projekt",
+    DeletionKind.LABEL: "Dieses Label",
+}
 
 
 def _validate_priority(value: int | None) -> int | None:

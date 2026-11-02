@@ -75,6 +75,8 @@ class Task:
     labels: tuple[str, ...] = ()
     url: str | None = None
     created_at: datetime | None = None  # Anlegezeitpunkt (zeitzonenbewusst), falls der Provider ihn liefert
+    section_id: str | None = None
+    completed_at: datetime | None = None  # nur bei erledigten Aufgaben (zeitzonenbewusst, lokal)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +84,21 @@ class Project:
     project_id: str
     name: str
     is_inbox: bool = False
+    is_archived: bool = False
+    parent_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    section_id: str
+    project_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Label:
+    label_id: str
+    name: str
 
 
 @dataclass(frozen=True, slots=True)

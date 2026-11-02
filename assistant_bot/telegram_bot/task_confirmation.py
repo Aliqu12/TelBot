@@ -1,4 +1,4 @@
-"""Telegram-Bestätigung für das Löschen von Aufgaben.
+"""Telegram-Bestätigung für das Löschen von Aufgaben, Projekten und Labels.
 
 Gelöscht wird ausschließlich hier – nach einem Klick des berechtigten Nutzers
 auf "Löschen". Die Schaltfläche enthält die ID der Löschanfrage; der
@@ -17,7 +17,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from ..tasks.models import TaskError, TaskNotFoundError, TaskTimeoutError
-from ..tasks.service import DELETION_TTL_SECONDS, DeletionError, PendingDeletion, TaskService
+from ..tasks.service import DELETION_TTL_SECONDS, DeletionError, DeletionKind, PendingDeletion, TaskService
 from ..tasks.tools import format_due
 from .access import AccessPolicy
 
@@ -66,39 +66,69 @@ class TaskConfirmationHandlers:
 
         if action == "keep":
             cancelled = self._tasks.cancel_deletion(chat.id, deletion_id)
-            text = "Alles klar, die Aufgabe bleibt bestehen." if cancelled else "Diese Löschanfrage ist nicht mehr offen."
+            if cancelled is None:
+                text = "Diese Löschanfrage ist nicht mehr offen."
+            else:
+                text = f"Alles klar, {_KEEP_SUBJECT[cancelled.kind]} bleibt bestehen."
             await context.bot.send_message(chat_id=chat.id, text=text)
             return
 
         try:
-            task = await self._tasks.confirm_deletion(chat.id, deletion_id)
+            deletion = await self._tasks.confirm_deletion(chat.id, deletion_id)
         except DeletionError as exc:
             text = str(exc)
         except TaskNotFoundError:
-            text = "Die Aufgabe existiert in Todoist nicht mehr (bereits erledigt oder gelöscht)."
+            text = "Der Eintrag existiert in Todoist nicht mehr (bereits erledigt oder gelöscht)."
         except TaskTimeoutError:
             text = (
-                "Todoist hat nicht rechtzeitig geantwortet. Die Aufgabe wurde möglicherweise trotzdem gelöscht. "
+                "Todoist hat nicht rechtzeitig geantwortet. Der Eintrag wurde möglicherweise trotzdem gelöscht. "
                 "Bitte in Todoist prüfen."
             )
         except TaskError as exc:
             text = f"Das Löschen ist fehlgeschlagen: {exc}"
         else:
-            text = f"Die Aufgabe „{task.content}“ wurde gelöscht."
+            text = f"{_DONE_SUBJECT[deletion.kind]} „{deletion.name}“ wurde gelöscht."
         await context.bot.send_message(chat_id=chat.id, text=text)
 
 
+_KEEP_SUBJECT = {
+    DeletionKind.TASK: "die Aufgabe",
+    DeletionKind.PROJECT: "das Projekt",
+    DeletionKind.LABEL: "das Label",
+}
+_DONE_SUBJECT = {
+    DeletionKind.TASK: "Die Aufgabe",
+    DeletionKind.PROJECT: "Das Projekt",
+    DeletionKind.LABEL: "Das Label",
+}
+
+
 def format_deletion(deletion: PendingDeletion, tasks: TaskService) -> str:
-    task = deletion.task
-    lines = ["Aufgabe endgültig löschen?", "", task.content]
-    if task.due is not None:
-        lines.append(f"Fällig: {format_due(task.due, tasks.now())}")
     minutes = max(1, DELETION_TTL_SECONDS // 60)
-    lines += [
-        "",
-        f"Gelöscht wird erst, wenn du auf \"Löschen\" tippst (gültig {minutes} Minuten). "
-        "Zum Abhaken stattdessen \"erledigt\" sagen.",
-    ]
+    confirm = f"Gelöscht wird erst, wenn du auf \"Löschen\" tippst (gültig {minutes} Minuten)."
+
+    if deletion.kind is DeletionKind.PROJECT:
+        lines = ["Projekt endgültig löschen?", "", deletion.name]
+        count = deletion.open_task_count or 0
+        lines.append(f"Enthält {count} offene Aufgabe{'n' if count != 1 else ''}, die mit gelöscht werden.")
+        if deletion.subproject_count:
+            n = deletion.subproject_count
+            lines.append(f"Dazu {n} Unterprojekt{'e' if n != 1 else ''}, die ebenfalls gelöscht werden.")
+        lines += ["", confirm + " Zum Aufräumen ohne Datenverlust stattdessen \"archivieren\" sagen."]
+        return "\n".join(lines)
+
+    if deletion.kind is DeletionKind.LABEL:
+        lines = ["Label endgültig löschen?", "", f"@{deletion.name}"]
+        count = deletion.open_task_count or 0
+        lines.append(f"Wird von {count} offene{'r' if count == 1 else 'n'} Aufgabe{'' if count == 1 else 'n'} entfernt.")
+        lines += ["", confirm]
+        return "\n".join(lines)
+
+    task = deletion.task
+    lines = ["Aufgabe endgültig löschen?", "", deletion.name]
+    if task is not None and task.due is not None:
+        lines.append(f"Fällig: {format_due(task.due, tasks.now())}")
+    lines += ["", confirm + " Zum Abhaken stattdessen \"erledigt\" sagen."]
     return "\n".join(lines)
 
 

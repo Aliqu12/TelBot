@@ -26,8 +26,10 @@ import httpx
 
 from .models import (
     DueInput,
+    Label,
     NewTask,
     Project,
+    Section,
     Task,
     TaskAuthenticationError,
     TaskChanges,
@@ -126,22 +128,96 @@ class TodoistTaskProvider:
     async def delete_task(self, task_id: str) -> None:
         await self._request("DELETE", f"/tasks/{_safe_id(task_id)}", retry_safe=False)
 
+    async def move_task(self, task_id: str, *, project_id: str | None = None, section_id: str | None = None) -> Task:
+        if (project_id is None) == (section_id is None):
+            raise TaskValidationError("Zum Verschieben genau ein Ziel angeben: Projekt oder Abschnitt.")
+        if project_id is not None:
+            body = {"project_id": _safe_id(project_id)}
+        else:
+            body = {"section_id": _safe_id(section_id or "")}
+        data = await self._request("POST", f"/tasks/{_safe_id(task_id)}/move", json=body, retry_safe=False)
+        return self._parse_task(data)
+
+    async def list_completed_tasks(self, since: datetime, until: datetime, project_id: str | None = None) -> list[Task]:
+        params: dict[str, Any] = {"since": _utc_text(since), "until": _utc_text(until)}
+        if project_id is not None:
+            params["project_id"] = _safe_id(project_id)
+        items = await self._get_all("/tasks/completed/by_completion_date", params, key="items")
+        return [self._parse_task(item) for item in items]
+
     # --- Projekte -------------------------------------------------------------
 
     async def list_projects(self) -> list[Project]:
         return [
-            Project(project_id=str(item["id"]), name=str(item.get("name") or ""), is_inbox=bool(item.get("inbox_project")))
+            _parse_project(item)
             for item in await self._get_all("/projects", {})
             if not item.get("is_archived") and not item.get("is_deleted")
         ]
+
+    async def list_archived_projects(self) -> list[Project]:
+        return [
+            _parse_project(item, archived=True)
+            for item in await self._get_all("/projects/archived", {})
+            if not item.get("is_deleted")
+        ]
+
+    async def create_project(self, name: str, parent_id: str | None = None) -> Project:
+        body: dict[str, Any] = {"name": name}
+        if parent_id is not None:
+            body["parent_id"] = _safe_id(parent_id)
+        return _parse_project(await self._request("POST", "/projects", json=body, retry_safe=False))
+
+    async def rename_project(self, project_id: str, name: str) -> Project:
+        data = await self._request("POST", f"/projects/{_safe_id(project_id)}", json={"name": name}, retry_safe=False)
+        return _parse_project(data)
+
+    async def archive_project(self, project_id: str) -> None:
+        await self._request("POST", f"/projects/{_safe_id(project_id)}/archive", retry_safe=False)
+
+    async def unarchive_project(self, project_id: str) -> None:
+        await self._request("POST", f"/projects/{_safe_id(project_id)}/unarchive", retry_safe=False)
+
+    async def delete_project(self, project_id: str) -> None:
+        await self._request("DELETE", f"/projects/{_safe_id(project_id)}", retry_safe=False)
+
+    # --- Abschnitte -----------------------------------------------------------
+
+    async def list_sections(self, project_id: str | None = None) -> list[Section]:
+        params: dict[str, Any] = {}
+        if project_id is not None:
+            params["project_id"] = _safe_id(project_id)
+        return [
+            _parse_section(item)
+            for item in await self._get_all("/sections", params)
+            if not item.get("is_archived") and not item.get("is_deleted")
+        ]
+
+    async def create_section(self, project_id: str, name: str) -> Section:
+        body = {"name": name, "project_id": _safe_id(project_id)}
+        return _parse_section(await self._request("POST", "/sections", json=body, retry_safe=False))
+
+    # --- Labels ---------------------------------------------------------------
+
+    async def list_labels(self) -> list[Label]:
+        return [_parse_label(item) for item in await self._get_all("/labels", {})]
+
+    async def create_label(self, name: str) -> Label:
+        return _parse_label(await self._request("POST", "/labels", json={"name": name}, retry_safe=False))
+
+    async def rename_label(self, label_id: str, name: str) -> Label:
+        data = await self._request("POST", f"/labels/{_safe_id(label_id)}", json={"name": name}, retry_safe=False)
+        return _parse_label(data)
+
+    async def delete_label(self, label_id: str) -> None:
+        await self._request("DELETE", f"/labels/{_safe_id(label_id)}", retry_safe=False)
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     # --- HTTP -----------------------------------------------------------------
 
-    async def _get_all(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Liest alle Seiten eines paginierten Endpunkts (``results`` + ``next_cursor``)."""
+    async def _get_all(self, path: str, params: dict[str, Any], key: str = "results") -> list[dict[str, Any]]:
+        """Liest alle Seiten eines paginierten Endpunkts (Liste unter ``key`` + ``next_cursor``)."""
         results: dict[str, dict[str, Any]] = {}
         cursor: str | None = None
         for _ in range(MAX_PAGES):
@@ -149,12 +225,13 @@ class TodoistTaskProvider:
             if cursor:
                 page_params["cursor"] = cursor
             data = await self._request("GET", path, params=page_params, retry_safe=True)
-            if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            if not isinstance(data, dict) or not isinstance(data.get(key), list):
                 raise TaskConnectionError("Todoist hat unerwartet geantwortet.")
-            for item in data["results"]:
+            for item in data[key]:
                 # Laut API können Einträge bei gleichzeitigen Änderungen doppelt erscheinen.
+                # Wiederkehrende Aufgaben tauchen als erledigt mehrfach mit gleicher ID auf (je Erledigung).
                 if isinstance(item, dict) and "id" in item:
-                    results[str(item["id"])] = item
+                    results[f"{item['id']}|{item.get('completed_at') or ''}"] = item
             cursor = data.get("next_cursor")
             if not cursor:
                 break
@@ -218,9 +295,9 @@ class TodoistTaskProvider:
         if status == 401:
             raise TaskAuthenticationError("Todoist hat den Zugriff abgelehnt. Bitte TODOIST_API_TOKEN prüfen.")
         if status == 403:
-            raise TaskError("Todoist erlaubt diese Aktion nicht (fehlende Berechtigung).")
+            raise TaskError("Todoist erlaubt diese Aktion nicht (fehlende Berechtigung oder Limit des Tarifs erreicht).")
         if status == 404:
-            raise TaskNotFoundError("Die Aufgabe wurde in Todoist nicht gefunden (evtl. erledigt oder gelöscht).")
+            raise TaskNotFoundError("Der Eintrag wurde in Todoist nicht gefunden (evtl. erledigt oder gelöscht).")
         if status >= 500:
             raise TaskConnectionError("Todoist ist gerade nicht erreichbar (Serverfehler).")
         if status in (400, 422):
@@ -245,9 +322,14 @@ class TodoistTaskProvider:
                 labels=tuple(str(label) for label in item.get("labels") or ()),
                 url=TASK_URL_TEMPLATE.format(task_id=task_id),
                 created_at=_parse_timestamp(item.get("added_at")),
+                section_id=str(item["section_id"]) if item.get("section_id") else None,
+                completed_at=self._local(_parse_timestamp(item.get("completed_at"))),
             )
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise TaskConnectionError("Todoist hat unerwartete Aufgabendaten geliefert.") from exc
+
+    def _local(self, value: datetime | None) -> datetime | None:
+        return value.astimezone(self._timezone) if value is not None else None
 
     def _parse_due(self, due: Any) -> TaskDue | None:
         if not due or not due.get("date"):
@@ -277,6 +359,37 @@ def _due_fields(due: DueInput | None) -> dict[str, Any]:
     if due.on is not None:
         return {"due_date": due.on.isoformat()}
     return {}
+
+
+def _parse_project(item: Any, *, archived: bool = False) -> Project:
+    try:
+        return Project(
+            project_id=str(item["id"]),
+            name=str(item.get("name") or ""),
+            is_inbox=bool(item.get("inbox_project")),
+            is_archived=archived or bool(item.get("is_archived")),
+            parent_id=str(item["parent_id"]) if item.get("parent_id") else None,
+        )
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise TaskConnectionError("Todoist hat unerwartete Projektdaten geliefert.") from exc
+
+
+def _parse_section(item: Any) -> Section:
+    try:
+        return Section(section_id=str(item["id"]), project_id=str(item["project_id"]), name=str(item.get("name") or ""))
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise TaskConnectionError("Todoist hat unerwartete Abschnittsdaten geliefert.") from exc
+
+
+def _parse_label(item: Any) -> Label:
+    try:
+        return Label(label_id=str(item["id"]), name=str(item.get("name") or ""))
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise TaskConnectionError("Todoist hat unerwartete Label-Daten geliefert.") from exc
+
+
+def _utc_text(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _to_api_priority(priority: int) -> int:
@@ -346,6 +459,6 @@ def _error_detail(response: httpx.Response) -> str:
 
 def _safe_id(value: str) -> str:
     if not _ID_PATTERN.fullmatch(value or ""):
-        raise TaskValidationError("Ungültige Aufgaben- oder Projekt-ID.")
+        raise TaskValidationError("Ungültige Todoist-ID.")
     return value
 

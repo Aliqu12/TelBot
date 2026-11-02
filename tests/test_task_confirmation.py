@@ -149,3 +149,38 @@ def test_text_handler_presents_deletion_prepared_by_assistant() -> None:
     message.reply_text.assert_awaited_once_with("Bitte bestätige das Löschen.")
     kwargs = context.bot.send_message.await_args.kwargs
     assert "Urlaub planen" in kwargs["text"] and kwargs["reply_markup"] is not None
+
+
+def test_project_deletion_texts_and_flow() -> None:
+    handlers, service, provider, _ = setup()
+    deletion = asyncio.run(service.request_project_deletion(OWNER, "haushalt"))
+    context = make_context()
+
+    asyncio.run(handlers.present_pending_deletion(context.bot, OWNER))
+    text = context.bot.send_message.await_args.kwargs["text"]
+    assert text.startswith("Projekt endgültig löschen?") and "Haushalt" in text
+    assert "Enthält 1 offene Aufgabe, die mit gelöscht werden." in text and "archivieren" in text
+
+    update = callback_update(f"task:del:{deletion.deletion_id}", user_id=OWNER)
+    asyncio.run(handlers.callback(update, context))  # type: ignore[arg-type]
+    asyncio.run(handlers.callback(update, context))  # type: ignore[arg-type]
+
+    texts = sent_texts(context)
+    assert texts[1] == "Das Projekt „Haushalt“ wurde gelöscht."
+    assert "Dieses Projekt wurde bereits gelöscht" in texts[2]
+    assert provider.calls == [("delete_project", "p-haus")]
+
+
+def test_label_deletion_texts_and_keep() -> None:
+    handlers, service, provider, _ = setup()
+    deletion = asyncio.run(service.request_label_deletion(OWNER, "privat"))
+    context = make_context()
+
+    asyncio.run(handlers.present_pending_deletion(context.bot, OWNER))
+    text = context.bot.send_message.await_args.kwargs["text"]
+    assert text.startswith("Label endgültig löschen?") and "@privat" in text and "entfernt" in text
+
+    asyncio.run(handlers.callback(callback_update(f"task:keep:{deletion.deletion_id}", user_id=OWNER), context))  # type: ignore[arg-type]
+
+    assert sent_texts(context)[-1] == "Alles klar, das Label bleibt bestehen."
+    assert provider.calls == []

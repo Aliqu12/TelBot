@@ -745,6 +745,16 @@ Funktionen (per normaler Telegram-Nachricht):
   Datum oder Wiederholung entfernen)
 - Aufgaben als erledigt markieren (wiederkehrende Aufgaben springen auf den nächsten Termin)
 - Aufgaben löschen – **nur** nach Tipp auf die Schaltfläche "Löschen"
+- Aufgaben in ein anderes Projekt oder einen Abschnitt verschieben (nicht zu verwechseln mit dem
+  Termin ändern)
+- Projekte anlegen (auch als Unterprojekt), umbenennen, archivieren, wiederherstellen und löschen –
+  Löschen **nur** nach Bestätigung, mit Hinweis auf die enthaltenen offenen Aufgaben; der Eingang
+  ist geschützt. Archivieren ist die sichere Alternative
+- Abschnitte in einem Projekt anzeigen und anlegen
+- Labels anzeigen, anlegen, umbenennen und löschen (Löschen nur nach Bestätigung; das Label wird
+  von allen Aufgaben entfernt)
+- Erledigte Aufgaben eines Zeitraums abrufen (z. B. "Was habe ich letzte Woche geschafft?"),
+  höchstens 3 Monate – Grundlage für einen späteren Wochenrückblick
 
 ### Architektur
 
@@ -772,7 +782,10 @@ Aufbau analog zur E-Mail-Integration:
   Zuordnung von "die Aufgabe Waschmaschine" zu einer Aufgabe, Schutz vor Duplikaten,
   Löschfreigabe
 - `assistant_bot/tasks/tools.py` – Werkzeuge für das Sprachmodell: `list_tasks`, `create_task`,
-  `update_task`, `complete_task`, `delete_task` (bereitet nur vor), `list_projects`
+  `update_task`, `complete_task`, `delete_task` (bereitet nur vor), `move_task`,
+  `list_completed_tasks`, `list_projects`, `create_project`, `rename_project`, `archive_project`,
+  `unarchive_project`, `delete_project` (bereitet nur vor), `list_sections`, `create_section`,
+  `list_labels`, `create_label`, `rename_label`, `delete_label` (bereitet nur vor)
 - `assistant_bot/tasks/check.py` – Verbindungstest ohne Telegram
 - `assistant_bot/telegram_bot/task_confirmation.py` – Schaltflächen "Löschen"/"Behalten"
 
@@ -794,9 +807,18 @@ Wichtige Entscheidungen:
   2 Minuten nur einmal angelegt – auch wenn eine Nachricht doppelt ankommt oder zwei
   Anfragen gleichzeitig laufen. Nach einem Zeitlimit beim Anlegen wird nicht automatisch
   wiederholt, weil Todoist die Aufgabe eventuell schon gespeichert hat.
-- **Löschen nur mit Bestätigung:** Das Werkzeug `delete_task` legt nur eine Löschanfrage an
+- **Löschen nur mit Bestätigung:** Die Werkzeuge `delete_task`, `delete_project` und
+  `delete_label` legen nur eine Löschanfrage an
   (zufällige ID, 5 Minuten gültig). Gelöscht wird ausschließlich über den
   Schaltflächen-Handler nach Zugriffsprüfung, auch bei doppeltem Klick genau einmal.
+- **Projekte, Abschnitte und Labels** werden über ihren Namen angesprochen (exakter Treffer vor
+  Teiltreffer, bei Mehrdeutigkeit wird nachgefragt). Doppelte Namen werden abgelehnt. Beim
+  Verschieben in einen Abschnitt wird der Abschnitt im gewählten Projekt gesucht.
+- **Erledigte Aufgaben:** Der Zeitraum gilt in deiner Zeitzone (Beginn inklusive, Ende
+  exklusiv). Wiederkehrende Aufgaben erscheinen je Erledigung einmal. Die Liste hat keine
+  Nummern, es lässt sich also nichts versehentlich darauf anwenden.
+- **Tarif-Grenzen:** Todoist begrenzt je nach Tarif u. a. Projekte, Abschnitte und Labels. Ein
+  abgelehnter Aufruf (HTTP 403) ergibt eine verständliche Meldung.
 - **Wiederholungen nicht versehentlich zerstören:** Wird bei einer wiederkehrenden Aufgabe nur
   ein neues Datum gesetzt, fragt der Bot nach, ob die Wiederholung entfallen soll.
 - **Todoist-Inhalte gelten als nicht vertrauenswürdig:** Sie werden markiert an das Modell
